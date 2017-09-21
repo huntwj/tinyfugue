@@ -232,8 +232,10 @@ static Macro *macro_spec(String *args, int offset, int *xmflag, ListOpts *listop
     spec->used[USED_NAME] = spec->used[USED_TRIG] =
 	spec->used[USED_HOOK] = spec->used[USED_KEY] = 0;
 
-    startopt(CS(args), "usSp#c#b:B:E:t:w:h:a:f:P:T:FiIn#1m:q" +
-	(listopts ? 0 : 3));
+    const char *fullOptString = "usSp#c#b:B:E:t:w:h:a:f:P:T:FiIn#1m:q";
+    char *optStr = (listopts ? (char *)fullOptString : (char *)fullOptString + 3);
+    startopt(CS(args), optStr);
+    // startopt(CS(args), "usSp#c#b:B:E:t:w:h:a:f:P:T:FiIn#1m:q" + (listopts ? 0 : 3));
     while (!error && (opt = nextopt(&ptr, &uval, NULL, &offset))) {
         switch (opt) {
         case 'u':

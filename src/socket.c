@@ -210,7 +210,7 @@ static const char *h_errlist[] = {
  * Nonblocking connect will work on a system if the column contains a 'W'
  * and there is no 'F' above it; 'N' does not matter.  The order of the
  * tests is arranged to keep the 'F's below the 'W's.
- * 
+ *
  *                                                        S
  *                                                        o
  *                                      P           L  S  l     H
@@ -662,11 +662,11 @@ void main_loop(void)
         if (depth > 1 && interrupted()) break;
 
         /* deal with pending signals */
-        /* at loop beginning in case of signals before main_loop() */ 
+        /* at loop beginning in case of signals before main_loop() */
         process_signals();
 
         /* run processes */
-        /* at loop beginning in case of processes before main_loop() */ 
+        /* at loop beginning in case of processes before main_loop() */
         gettime(&now);
         if (proctime.tv_sec && tvcmp(&proctime, &now) <= 0)
 	    runall(0, NULL); /* run timed processes */
@@ -1842,7 +1842,7 @@ static int nonblocking_gethost(const char *name, const char *port,
 #ifdef PLATFORM_OS2
     {
         threadpara *tpara;
-  
+
         if ((tpara = XMALLOC(sizeof(threadpara)))) {
             setmode(fds[0],O_BINARY);
             setmode(fds[1],O_BINARY);
@@ -2600,7 +2600,9 @@ static void handle_socket_lines(void)
 	    socks_with_lines--;
 
 	if (line->attrs & (F_TFPROMPT)) {
-	    incoming_text = line;
+        // TODO: This should be cleaner. Adding cast to avoid warning,
+        // But really we should have a copy function or something, right?
+	    incoming_text = (String *) line;
 	    handle_prompt(incoming_text, 0, TRUE);
 	    continue;
 	}
@@ -3465,10 +3467,10 @@ const char *world_info(const char *worldname, const char *fieldname)
 {
     World *world;
     const char *result;
- 
+
     world = worldname ? find_world(worldname) : xworld();
     if (!world) return ""; /* not an error */
- 
+
     if (!fieldname || strcmp("name", fieldname) == 0) {
         result = world->name;
     } else if (strcmp("type", fieldname) == 0) {
