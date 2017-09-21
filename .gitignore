@@ -1,1 +1,7 @@
 Makefile
+/config.log
+/config.status
+
+src/tfconfig.h
+src/tfdefs.h
+unix/vars.mak
