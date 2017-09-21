@@ -1,3 +1,4 @@
+# ./configure artifacts
 Makefile
 /config.log
 /config.status
@@ -5,3 +6,13 @@ Makefile
 src/tfconfig.h
 src/tfdefs.h
 unix/vars.mak
+
+# Build artifacts
+*.o
+src/tf
+tf-lib/tf-help.idx
+
+src/makehelp
+src/TF_LIBDIR.build
+
+src/makehelp.dSYM
