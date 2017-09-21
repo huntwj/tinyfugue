@@ -27,6 +27,16 @@
                 "isDefault": true
             },
             "problemMatcher": []
+        },
+        {
+            "taskName": "Build - Re- ./configure",
+            "type": "shell",
+            "command": "./configure",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": []
         }
     ]
 }
