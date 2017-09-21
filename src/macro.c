@@ -621,7 +621,7 @@ Macro *find_hashed_macro(const char *name, unsigned int hash)
 static Macro *match_exact(int hooknum, const char *str, attr_t attrs)
 {
     ListEntry *node;
-  
+
     if (hooknum < 0 && !*str) return NULL;
     for (node = hooknum>=0 ? hooklist[hooknum].head : triglist->head; node;
 	node = node->next)
@@ -893,7 +893,8 @@ static int complete_macro(Macro *spec, unsigned int hash, int num,
     }
     spec->attr &= ~F_NONE;
     if (spec->nsubattr) {
-	int n = pcre_info(spec->trig.ri->re, NULL, NULL);
+    int n;
+    pcre_fullinfo(spec->trig.ri->re, NULL, PCRE_INFO_CAPTURECOUNT, &n);
 	for (i = 0; i < spec->nsubattr; i++) {
 	    spec->subattr[i].attr &= ~F_NONE;
 	    if (spec->subattr[i].subexp > n) {
@@ -1268,7 +1269,7 @@ static conString *print_def(TFILE *file, String *buffer, Macro *p)
 	Sappendf(buffer, "-T'%q' ", '\'', p->wtype.str);
     }
 
-    if (p->expr) 
+    if (p->expr)
 	Sappendf(buffer, "-E'%q' ", '\'', p->expr->data);
 
     if (p->trig.str) {
@@ -1289,11 +1290,11 @@ static conString *print_def(TFILE *file, String *buffer, Macro *p)
     }
 
 #if 0 /* obsolete */
-    if (*p->keyname) 
+    if (*p->keyname)
 	Sappendf(buffer, "-B'%s' ", p->keyname);
     else
 #endif
-    if (*p->bind) 
+    if (*p->bind)
 	Sappendf(buffer, "-b'%q' ", '\'', ascii_to_print(p->bind)->data);
 
     if (p->quiet) Stringcat(buffer, "-q ");
