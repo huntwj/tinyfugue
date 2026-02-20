@@ -13,6 +13,7 @@
 //! | [`MatchMode::Simple`] | `MATCH_SIMPLE` | Case-insensitive exact match |
 //! | [`MatchMode::Substr`] | `MATCH_SUBSTR` | Case-insensitive substring search |
 
+use aho_corasick::{AhoCorasick, AhoCorasickBuilder};
 use regex::Regex;
 
 // ── Public types ─────────────────────────────────────────────────────────────
@@ -48,8 +49,8 @@ impl std::error::Error for PatternError {}
 enum Compiled {
     Regex(Regex),
     Glob,
-    Simple,
-    Substr,
+    Simple(String),
+    Substr(Box<AhoCorasick>),
 }
 
 /// A compiled pattern ready for matching.
@@ -70,30 +71,52 @@ impl Pattern {
                 check_glob(src).map_err(PatternError::InvalidGlob)?;
                 Compiled::Glob
             }
-            MatchMode::Simple => Compiled::Simple,
-            MatchMode::Substr => Compiled::Substr,
+            MatchMode::Simple => Compiled::Simple(src.to_ascii_lowercase()),
+            MatchMode::Substr => {
+                let ac = AhoCorasickBuilder::new()
+                    .ascii_case_insensitive(true)
+                    .build([src]);
+                Compiled::Substr(Box::new(ac))
+            }
         };
-        Ok(Self { src: src.to_owned(), mode, compiled })
+        Ok(Self {
+            src: src.to_owned(),
+            mode,
+            compiled,
+        })
     }
 
     /// The original source string.
-    pub fn src(&self) -> &str { &self.src }
+    pub fn src(&self) -> &str {
+        &self.src
+    }
 
     /// The match mode.
-    pub fn mode(&self) -> MatchMode { self.mode }
+    pub fn mode(&self) -> MatchMode {
+        self.mode
+    }
 
     /// Returns `true` if this pattern matches `text`.
     ///
     /// An empty source string always matches (C: `if (!pat->str) return 1`).
     pub fn matches(&self, text: &str) -> bool {
-        if self.src.is_empty() { return true; }
+        if self.src.is_empty() {
+            return true;
+        }
         match &self.compiled {
-            Compiled::Regex(re)  => re.is_match(text),
-            Compiled::Glob       => glob_match(&self.src, text),
-            Compiled::Simple     => self.src.eq_ignore_ascii_case(text),
-            Compiled::Substr     => {
-                text.to_lowercase().contains(&self.src.to_lowercase())
+            Compiled::Regex(re) => re.is_match(text),
+            Compiled::Glob => glob_match(&self.src, text),
+            Compiled::Simple(lo) => {
+                if text.len() != lo.len() {
+                    false
+                } else {
+                    text.as_bytes()
+                        .iter()
+                        .zip(lo.as_bytes())
+                        .all(|(&a, &b)| a.eq_ignore_ascii_case(&b))
+                }
             }
+            Compiled::Substr(ac) => ac.is_match(text),
         }
     }
 
@@ -103,7 +126,12 @@ impl Pattern {
     /// `whole`, and `right` but has no numbered capture groups.
     pub fn find<'t>(&self, text: &'t str) -> Option<Captures<'t>> {
         if self.src.is_empty() {
-            return Some(Captures { text, start: 0, end: 0, groups: vec![] });
+            return Some(Captures {
+                text,
+                start: 0,
+                end: 0,
+                groups: vec![],
+            });
         }
         match &self.compiled {
             Compiled::Regex(re) => {
@@ -112,11 +140,27 @@ impl Pattern {
                 let groups = (1..caps.len())
                     .map(|i| caps.get(i).map(|m| (m.start(), m.end())))
                     .collect();
-                Some(Captures { text, start: whole.start(), end: whole.end(), groups })
+                Some(Captures {
+                    text,
+                    start: whole.start(),
+                    end: whole.end(),
+                    groups,
+                })
             }
+            Compiled::Substr(ac) => ac.find(text).map(|m| Captures {
+                text,
+                start: m.start(),
+                end: m.end(),
+                groups: vec![],
+            }),
             _ => {
                 if self.matches(text) {
-                    Some(Captures { text, start: 0, end: text.len(), groups: vec![] })
+                    Some(Captures {
+                        text,
+                        start: 0,
+                        end: text.len(),
+                        groups: vec![],
+                    })
                 } else {
                     None
                 }
@@ -139,22 +183,32 @@ pub struct Captures<'t> {
 
 impl<'t> Captures<'t> {
     /// Text before the match (C: `regsubstr(dest, -1)`).
-    pub fn left(&self) -> &'t str { &self.text[..self.start] }
+    pub fn left(&self) -> &'t str {
+        &self.text[..self.start]
+    }
 
     /// The entire matched substring (C: capture group 0).
-    pub fn whole(&self) -> &'t str { &self.text[self.start..self.end] }
+    pub fn whole(&self) -> &'t str {
+        &self.text[self.start..self.end]
+    }
 
     /// Text after the match (C: `regsubstr(dest, -2)`).
-    pub fn right(&self) -> &'t str { &self.text[self.end..] }
+    pub fn right(&self) -> &'t str {
+        &self.text[self.end..]
+    }
 
     /// The nth capture group, 1-based (C: `regsubstr(dest, n)` with n > 0).
     pub fn group(&self, n: usize) -> Option<&'t str> {
-        let &(s, e) = self.groups.get(n.checked_sub(1)?)?.as_ref()?;
-        Some(&self.text[s..e])
+        self.groups
+            .get(n.checked_sub(1)?)?
+            .as_ref()
+            .map(|&(s, e)| &self.text[s..e])
     }
 
     /// Number of capture groups (excluding the overall match).
-    pub fn group_count(&self) -> usize { self.groups.len() }
+    pub fn group_count(&self) -> usize {
+        self.groups.len()
+    }
 }
 
 // ── Regex compilation ─────────────────────────────────────────────────────────
@@ -177,9 +231,17 @@ fn compile_regex(pattern: &str) -> Result<Regex, PatternError> {
 fn has_unescaped_upper(pattern: &str) -> bool {
     let mut escaped = false;
     for ch in pattern.chars() {
-        if escaped { escaped = false; continue; }
-        if ch == '\\' { escaped = true; continue; }
-        if ch.is_uppercase() { return true; }
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+            continue;
+        }
+        if ch.is_uppercase() {
+            return true;
+        }
     }
     false
 }
@@ -226,7 +288,9 @@ fn smatch(mut pat: &[u8], mut s: &[u8], start: &[u8], inword: bool) -> bool {
         match p {
             b'\\' => {
                 // Escaped literal.
-                if pat.len() < 2 { return s.is_empty(); }
+                if pat.len() < 2 {
+                    return s.is_empty();
+                }
                 match s.first() {
                     Some(&c) if c.eq_ignore_ascii_case(&pat[1]) => {}
                     _ => return false,
@@ -263,7 +327,9 @@ fn smatch(mut pat: &[u8], mut s: &[u8], start: &[u8], inword: bool) -> bool {
                     // `*` inside `{…}`: match up to but not including space.
                     let mut pos = s;
                     while !pos.is_empty() && pos[0] != b' ' {
-                        if smatch(pat, pos, start, inword) { return true; }
+                        if smatch(pat, pos, start, inword) {
+                            return true;
+                        }
                         pos = &pos[1..];
                     }
                     return smatch(pat, pos, start, inword);
@@ -286,13 +352,19 @@ fn smatch(mut pat: &[u8], mut s: &[u8], start: &[u8], inword: bool) -> bool {
                 } else if pat[0] == b'[' {
                     let mut pos = s;
                     while !pos.is_empty() {
-                        if smatch(pat, pos, start, inword) { return true; }
+                        if smatch(pat, pos, start, inword) {
+                            return true;
+                        }
                         pos = &pos[1..];
                     }
                     return false;
                 } else {
                     // Optimisation: skip to next occurrence of the first literal.
-                    let first = if pat[0] == b'\\' && pat.len() > 1 { pat[1] } else { pat[0] };
+                    let first = if pat[0] == b'\\' && pat.len() > 1 {
+                        pat[1]
+                    } else {
+                        pat[0]
+                    };
                     let first_lo = first.to_ascii_lowercase();
                     let mut pos = s;
                     while !pos.is_empty() {
@@ -308,7 +380,9 @@ fn smatch(mut pat: &[u8], mut s: &[u8], start: &[u8], inword: bool) -> bool {
             }
 
             b'[' => {
-                if inword && s.first() == Some(&b' ') { return false; }
+                if inword && s.first() == Some(&b' ') {
+                    return false;
+                }
                 let ch = match s.first().copied() {
                     Some(c) => c,
                     None => return false,
@@ -325,7 +399,9 @@ fn smatch(mut pat: &[u8], mut s: &[u8], start: &[u8], inword: bool) -> bool {
             b'{' => {
                 // Word-group: must be at a word boundary.
                 let s_off = start.len() - s.len();
-                if s_off != 0 && start[s_off - 1] != b' ' { return false; }
+                if s_off != 0 && start[s_off - 1] != b' ' {
+                    return false;
+                }
 
                 let close = match find_unescaped(pat, b'}') {
                     Some(i) => i,
@@ -345,13 +421,19 @@ fn smatch(mut pat: &[u8], mut s: &[u8], start: &[u8], inword: bool) -> bool {
                         matched = true;
                         break;
                     }
-                    if pipe >= alts.len() { break; }
+                    if pipe >= alts.len() {
+                        break;
+                    }
                     alts = &alts[pipe + 1..];
                 }
-                if !matched { return false; }
+                if !matched {
+                    return false;
+                }
 
                 // Consume the rest of the current word in the subject.
-                while !s.is_empty() && s[0] != b' ' { s = &s[1..]; }
+                while !s.is_empty() && s[0] != b' ' {
+                    s = &s[1..];
+                }
                 pat = after;
             }
 
@@ -379,7 +461,9 @@ fn smatch(mut pat: &[u8], mut s: &[u8], start: &[u8], inword: bool) -> bool {
 fn cmatch(mut class: &[u8], ch: u8) -> Option<&[u8]> {
     let ch = ch.to_ascii_lowercase();
     let negated = class.first() == Some(&b'^');
-    if negated { class = &class[1..]; }
+    if negated {
+        class = &class[1..];
+    }
 
     let mut matched = false;
     loop {
@@ -387,7 +471,9 @@ fn cmatch(mut class: &[u8], ch: u8) -> Option<&[u8]> {
             None => return None, // malformed
             Some(b']') => break,
             Some(b'\\') if class.len() > 1 => {
-                if class[1].to_ascii_lowercase() == ch { matched = true; }
+                if class[1].to_ascii_lowercase() == ch {
+                    matched = true;
+                }
                 class = &class[2..];
             }
             Some(lo) => {
@@ -404,7 +490,9 @@ fn cmatch(mut class: &[u8], ch: u8) -> Option<&[u8]> {
                     }
                     class = &class[3..];
                 } else {
-                    if lo.to_ascii_lowercase() == ch { matched = true; }
+                    if lo.to_ascii_lowercase() == ch {
+                        matched = true;
+                    }
                     class = &class[1..];
                 }
             }
@@ -413,19 +501,30 @@ fn cmatch(mut class: &[u8], ch: u8) -> Option<&[u8]> {
 
     // `class` now points at `]`; advance past it.
     let rest = &class[1..];
-    if matched ^ negated { Some(rest) } else { None }
+    if matched ^ negated {
+        Some(rest)
+    } else {
+        None
+    }
 }
 
 /// Find the first unescaped occurrence of `needle` in `haystack`.
 fn find_unescaped(haystack: &[u8], needle: u8) -> Option<usize> {
     let mut i = 0;
     while i < haystack.len() {
-        if haystack[i] == b'\\' { i += 2; continue; }
-        if haystack[i] == needle { return Some(i); }
+        if haystack[i] == b'\\' {
+            i += 2;
+            continue;
+        }
+        if haystack[i] == needle {
+            return Some(i);
+        }
         i += 1;
     }
     None
 }
+
+// Case-insensitive substring search is now handled by `AhoCorasick` (Substr mode).
 
 // ── Glob syntax validation ────────────────────────────────────────────────────
 
@@ -439,19 +538,31 @@ pub fn check_glob(pat: &str) -> Result<(), String> {
 
     while let Some((i, ch)) = chars.next() {
         match ch {
-            '\\' => { chars.next(); } // skip escaped char
+            '\\' => {
+                chars.next();
+            } // skip escaped char
             '[' => {
                 // scan to matching ]
                 let mut found = false;
                 let iter = chars.by_ref();
                 while let Some((_, c)) = iter.next() {
-                    if c == '\\' { iter.next(); continue; }
-                    if c == ']' { found = true; break; }
+                    if c == '\\' {
+                        iter.next();
+                        continue;
+                    }
+                    if c == ']' {
+                        found = true;
+                        break;
+                    }
                 }
-                if !found { return Err("unmatched '['".into()); }
+                if !found {
+                    return Err("unmatched '['".into());
+                }
             }
             '{' => {
-                if inword { return Err("nested '{'".into()); }
+                if inword {
+                    return Err("nested '{'".into());
+                }
                 // preceding character must be start, space, *, ?, or ]
                 let prev = pat_start[..i].chars().next_back();
                 if let Some(p) = prev {
@@ -477,7 +588,9 @@ pub fn check_glob(pat: &str) -> Result<(), String> {
             _ => {}
         }
     }
-    if inword { return Err("unmatched '{'".into()); }
+    if inword {
+        return Err("unmatched '{'".into());
+    }
     Ok(())
 }
 
@@ -528,7 +641,12 @@ mod tests {
 
     #[test]
     fn empty_pattern_always_matches() {
-        for mode in [MatchMode::Regexp, MatchMode::Glob, MatchMode::Simple, MatchMode::Substr] {
+        for mode in [
+            MatchMode::Regexp,
+            MatchMode::Glob,
+            MatchMode::Simple,
+            MatchMode::Substr,
+        ] {
             let p = Pattern::new("", mode).unwrap();
             assert!(p.matches("anything"), "mode {mode:?} failed");
             assert!(p.matches(""), "mode {mode:?} failed on empty");
