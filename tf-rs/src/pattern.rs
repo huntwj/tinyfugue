@@ -752,4 +752,12 @@ mod tests {
     fn check_glob_unmatched_brace() {
         assert!(check_glob("{north").is_err());
     }
+
+    #[test]
+    fn simple_mode_non_ascii_case() {
+        let p = Pattern::new("é", MatchMode::Simple).unwrap();
+        // `MatchMode::Simple` is ASCII-only case-insensitive; Unicode
+        // case folding is not performed, so upper/lower variants won't match.
+        assert!(!p.matches("É"));
+    }
 }

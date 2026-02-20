@@ -25,18 +25,20 @@ pub fn call_builtin(name: &str, args: Vec<Value>) -> Option<Result<Value, String
             }
             "strcat" => {
                 let mut out = String::new();
-                for a in &args { out.push_str(&a.as_str()); }
+                for a in &args {
+                    out.push_str(&a.as_str());
+                }
                 Value::Str(out)
             }
             "substr" => {
-                let s   = get_str(&args, 0, name)?;
+                let s = get_str(&args, 0, name)?;
                 let pos = get_int(&args, 1, name)? as usize;
                 let len_arg = args.get(2).map(|v| v.as_int() as usize);
                 let chars: Vec<char> = s.chars().collect();
                 let start = pos.min(chars.len());
                 let slice = match len_arg {
                     Some(n) => &chars[start..((start + n).min(chars.len()))],
-                    None    => &chars[start..],
+                    None => &chars[start..],
                 };
                 Value::Str(slice.iter().collect())
             }
@@ -44,9 +46,9 @@ pub fn call_builtin(name: &str, args: Vec<Value>) -> Option<Result<Value, String
                 let a = get_str(&args, 0, name)?;
                 let b = get_str(&args, 1, name)?;
                 Value::Int(match a.cmp(&b) {
-                    std::cmp::Ordering::Less    => -1,
-                    std::cmp::Ordering::Equal   =>  0,
-                    std::cmp::Ordering::Greater =>  1,
+                    std::cmp::Ordering::Less => -1,
+                    std::cmp::Ordering::Equal => 0,
+                    std::cmp::Ordering::Greater => 1,
                 })
             }
             "strncmp" => {
@@ -56,9 +58,9 @@ pub fn call_builtin(name: &str, args: Vec<Value>) -> Option<Result<Value, String
                 let ac: String = a.chars().take(n).collect();
                 let bc: String = b.chars().take(n).collect();
                 Value::Int(match ac.cmp(&bc) {
-                    std::cmp::Ordering::Less    => -1,
-                    std::cmp::Ordering::Equal   =>  0,
-                    std::cmp::Ordering::Greater =>  1,
+                    std::cmp::Ordering::Less => -1,
+                    std::cmp::Ordering::Equal => 0,
+                    std::cmp::Ordering::Greater => 1,
                 })
             }
             "toupper" => {
@@ -71,10 +73,10 @@ pub fn call_builtin(name: &str, args: Vec<Value>) -> Option<Result<Value, String
             }
             "strstr" => {
                 let haystack = get_str(&args, 0, name)?;
-                let needle   = get_str(&args, 1, name)?;
+                let needle = get_str(&args, 1, name)?;
                 Value::Int(match haystack.find(&needle) {
                     Some(i) => i as i64,
-                    None    => -1,
+                    None => -1,
                 })
             }
             "strrep" => {
@@ -86,15 +88,16 @@ pub fn call_builtin(name: &str, args: Vec<Value>) -> Option<Result<Value, String
             "replace" => {
                 // replace(haystack, needle, replacement)
                 let haystack = get_str(&args, 0, name)?;
-                let needle   = get_str(&args, 1, name)?;
-                let repl     = get_str(&args, 2, name)?;
+                let needle = get_str(&args, 1, name)?;
+                let repl = get_str(&args, 2, name)?;
                 Value::Str(haystack.replace(&needle, &repl))
             }
             "pad" => {
                 // pad(str, width[, char]) — right-pad with spaces (or given char)
-                let s     = get_str(&args, 0, name)?;
+                let s = get_str(&args, 0, name)?;
                 let width = get_int(&args, 1, name)? as usize;
-                let pad_c = args.get(2)
+                let pad_c = args
+                    .get(2)
                     .map(|v| v.as_str().chars().next().unwrap_or(' '))
                     .unwrap_or(' ');
                 let cur = s.chars().count();
@@ -109,21 +112,30 @@ pub fn call_builtin(name: &str, args: Vec<Value>) -> Option<Result<Value, String
 
             // ── Math functions ───────────────────────────────────────────────
             "abs" => {
-                let v = args.into_iter().next().ok_or_else(|| format!("{name}: too few args"))?;
+                let v = args
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| format!("{name}: too few args"))?;
                 match v {
-                    Value::Int(n)   => Value::Int(n.abs()),
+                    Value::Int(n) => Value::Int(n.abs()),
                     Value::Float(x) => Value::Float(x.abs()),
-                    Value::Str(s)   => {
-                        if let Ok(n) = s.trim().parse::<i64>() { Value::Int(n.abs()) }
-                        else if let Ok(x) = s.trim().parse::<f64>() { Value::Float(x.abs()) }
-                        else { Value::Int(0) }
+                    Value::Str(s) => {
+                        if let Ok(n) = s.trim().parse::<i64>() {
+                            Value::Int(n.abs())
+                        } else if let Ok(x) = s.trim().parse::<f64>() {
+                            Value::Float(x.abs())
+                        } else {
+                            Value::Int(0)
+                        }
                     }
                 }
             }
             "mod" => {
                 let a = get_int(&args, 0, name)?;
                 let b = get_int(&args, 1, name)?;
-                if b == 0 { return Err("mod: modulo by zero".into()); }
+                if b == 0 {
+                    return Err("mod: modulo by zero".into());
+                }
                 Value::Int(a % b)
             }
             "rand" => {
@@ -139,21 +151,21 @@ pub fn call_builtin(name: &str, args: Vec<Value>) -> Option<Result<Value, String
                 let x = get_float(&args, 0, name)?;
                 Value::Int(x.trunc() as i64)
             }
-            "sqrt"  => Value::Float(get_float(&args, 0, name)?.sqrt()),
-            "sin"   => Value::Float(get_float(&args, 0, name)?.sin()),
-            "cos"   => Value::Float(get_float(&args, 0, name)?.cos()),
-            "tan"   => Value::Float(get_float(&args, 0, name)?.tan()),
-            "exp"   => Value::Float(get_float(&args, 0, name)?.exp()),
-            "ln"    => Value::Float(get_float(&args, 0, name)?.ln()),
+            "sqrt" => Value::Float(get_float(&args, 0, name)?.sqrt()),
+            "sin" => Value::Float(get_float(&args, 0, name)?.sin()),
+            "cos" => Value::Float(get_float(&args, 0, name)?.cos()),
+            "tan" => Value::Float(get_float(&args, 0, name)?.tan()),
+            "exp" => Value::Float(get_float(&args, 0, name)?.exp()),
+            "ln" => Value::Float(get_float(&args, 0, name)?.ln()),
             "log10" => Value::Float(get_float(&args, 0, name)?.log10()),
-            "pow"   => {
+            "pow" => {
                 let base = get_float(&args, 0, name)?;
-                let exp  = get_float(&args, 1, name)?;
+                let exp = get_float(&args, 1, name)?;
                 Value::Float(base.powf(exp))
             }
-            "asin"  => Value::Float(get_float(&args, 0, name)?.asin()),
-            "acos"  => Value::Float(get_float(&args, 0, name)?.acos()),
-            "atan"  => {
+            "asin" => Value::Float(get_float(&args, 0, name)?.asin()),
+            "acos" => Value::Float(get_float(&args, 0, name)?.acos()),
+            "atan" => {
                 let y = get_float(&args, 0, name)?;
                 if args.len() >= 2 {
                     let x = get_float(&args, 1, name)?;
@@ -165,12 +177,13 @@ pub fn call_builtin(name: &str, args: Vec<Value>) -> Option<Result<Value, String
 
             // ── Type inspection ──────────────────────────────────────────────
             "whatis" => {
-                let v = args.into_iter().next().ok_or_else(|| format!("{name}: too few args"))?;
+                let v = args
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| format!("{name}: too few args"))?;
                 Value::Str(v.type_name().to_owned())
             }
-            "systype" => {
-                Value::Str(std::env::consts::OS.to_owned())
-            }
+            "systype" => Value::Str(std::env::consts::OS.to_owned()),
 
             // ── Character functions ───────────────────────────────────────────
             "ascii" => {
@@ -220,17 +233,25 @@ mod tests {
     use super::*;
 
     fn call(name: &str, args: Vec<Value>) -> Value {
-        call_builtin(name, args).expect("not a builtin").expect("call failed")
+        call_builtin(name, args)
+            .expect("not a builtin")
+            .expect("call failed")
     }
 
     #[test]
     fn strlen() {
-        assert_eq!(call("strlen", vec![Value::Str("hello".into())]), Value::Int(5));
+        assert_eq!(
+            call("strlen", vec![Value::Str("hello".into())]),
+            Value::Int(5)
+        );
     }
 
     #[test]
     fn strcat() {
-        let v = call("strcat", vec![Value::Str("foo".into()), Value::Str("bar".into())]);
+        let v = call(
+            "strcat",
+            vec![Value::Str("foo".into()), Value::Str("bar".into())],
+        );
         assert_eq!(v, Value::Str("foobar".into()));
     }
 
@@ -242,7 +263,10 @@ mod tests {
 
     #[test]
     fn substr_with_len() {
-        let v = call("substr", vec![Value::Str("hello".into()), Value::Int(1), Value::Int(3)]);
+        let v = call(
+            "substr",
+            vec![Value::Str("hello".into()), Value::Int(1), Value::Int(3)],
+        );
         assert_eq!(v, Value::Str("ell".into()));
     }
 
@@ -258,28 +282,46 @@ mod tests {
 
     #[test]
     fn toupper_lower() {
-        assert_eq!(call("toupper", vec!["Hello".into()]), Value::Str("HELLO".into()));
-        assert_eq!(call("tolower", vec!["Hello".into()]), Value::Str("hello".into()));
+        assert_eq!(
+            call("toupper", vec!["Hello".into()]),
+            Value::Str("HELLO".into())
+        );
+        assert_eq!(
+            call("tolower", vec!["Hello".into()]),
+            Value::Str("hello".into())
+        );
     }
 
     #[test]
     fn strstr_found() {
-        assert_eq!(call("strstr", vec!["foobar".into(), "bar".into()]), Value::Int(3));
+        assert_eq!(
+            call("strstr", vec!["foobar".into(), "bar".into()]),
+            Value::Int(3)
+        );
     }
 
     #[test]
     fn strstr_not_found() {
-        assert_eq!(call("strstr", vec!["foobar".into(), "xyz".into()]), Value::Int(-1));
+        assert_eq!(
+            call("strstr", vec!["foobar".into(), "xyz".into()]),
+            Value::Int(-1)
+        );
     }
 
     #[test]
     fn strrep() {
-        assert_eq!(call("strrep", vec!["ab".into(), Value::Int(3)]), Value::Str("ababab".into()));
+        assert_eq!(
+            call("strrep", vec!["ab".into(), Value::Int(3)]),
+            Value::Str("ababab".into())
+        );
     }
 
     #[test]
     fn replace_fn() {
-        let v = call("replace", vec!["hello world".into(), "world".into(), "Rust".into()]);
+        let v = call(
+            "replace",
+            vec!["hello world".into(), "world".into(), "Rust".into()],
+        );
         assert_eq!(v, Value::Str("hello Rust".into()));
     }
 
@@ -311,14 +353,26 @@ mod tests {
 
     #[test]
     fn pow_fn() {
-        assert_eq!(call("pow", vec![Value::Float(2.0), Value::Float(10.0)]), Value::Float(1024.0));
+        assert_eq!(
+            call("pow", vec![Value::Float(2.0), Value::Float(10.0)]),
+            Value::Float(1024.0)
+        );
     }
 
     #[test]
     fn whatis() {
-        assert_eq!(call("whatis", vec![Value::Int(1)]),   Value::Str("integer".into()));
-        assert_eq!(call("whatis", vec![Value::Float(1.0)]), Value::Str("real".into()));
-        assert_eq!(call("whatis", vec!["hi".into()]),     Value::Str("string".into()));
+        assert_eq!(
+            call("whatis", vec![Value::Int(1)]),
+            Value::Str("integer".into())
+        );
+        assert_eq!(
+            call("whatis", vec![Value::Float(1.0)]),
+            Value::Str("real".into())
+        );
+        assert_eq!(
+            call("whatis", vec!["hi".into()]),
+            Value::Str("string".into())
+        );
     }
 
     #[test]
@@ -330,5 +384,30 @@ mod tests {
     #[test]
     fn unknown_builtin_returns_none() {
         assert!(call_builtin("no_such_fn", vec![]).is_none());
+    }
+
+    #[test]
+    fn pad_multibyte_char() {
+        let v = call(
+            "pad",
+            vec![
+                Value::Str("hi".into()),
+                Value::Int(5),
+                Value::Str("€".into()),
+            ],
+        );
+        assert_eq!(v, Value::Str("hi€€€".into()));
+    }
+
+    #[test]
+    fn substr_out_of_bounds_and_len() {
+        let v = call("substr", vec![Value::Str("hello".into()), Value::Int(10)]);
+        assert_eq!(v, Value::Str("".into()));
+
+        let v2 = call(
+            "substr",
+            vec![Value::Str("hello".into()), Value::Int(3), Value::Int(10)],
+        );
+        assert_eq!(v2, Value::Str("lo".into()));
     }
 }

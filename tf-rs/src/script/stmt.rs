@@ -15,10 +15,7 @@ pub enum Stmt {
         else_block: Vec<Stmt>,
     },
     /// `/while (cond) body /done`
-    While {
-        cond: String,
-        body: Vec<Stmt>,
-    },
+    While { cond: String, body: Vec<Stmt> },
     /// `/for (init; cond; step) body /done`
     For {
         init: String,
@@ -67,7 +64,10 @@ pub fn parse_script(src: &str) -> Result<Vec<Stmt>, String> {
         .filter(|s| !s.is_empty() && !s.starts_with('#'))
         .collect();
 
-    let mut parser = StmtParser { stmts: stmts_raw, pos: 0 };
+    let mut parser = StmtParser {
+        stmts: stmts_raw,
+        pos: 0,
+    };
     parser.parse_block_until(None)
 }
 
@@ -106,7 +106,9 @@ fn split_by_separator(line: &str) -> Vec<String> {
             }
             '\\' if in_str => {
                 current.push(ch);
-                if let Some(next) = chars.next() { current.push(next); }
+                if let Some(next) = chars.next() {
+                    current.push(next);
+                }
             }
             '%' if !in_str => {
                 if chars.peek() == Some(&';') {
@@ -139,7 +141,9 @@ impl StmtParser {
 
     fn advance(&mut self) -> Option<String> {
         let s = self.stmts.get(self.pos).cloned();
-        if s.is_some() { self.pos += 1; }
+        if s.is_some() {
+            self.pos += 1;
+        }
         s
     }
 
@@ -154,9 +158,7 @@ impl StmtParser {
             let line = match self.peek() {
                 None => {
                     if let Some(stops) = stop_at {
-                        return Err(format!(
-                            "unexpected EOF, expected one of: {stops:?}"
-                        ));
+                        return Err(format!("unexpected EOF, expected one of: {stops:?}"));
                     }
                     break;
                 }
@@ -191,11 +193,17 @@ impl StmtParser {
             "for" => self.parse_for(rest),
             "let" => Ok(parse_let_or_set(rest, true)),
             "set" => Ok(parse_let_or_set(rest, false)),
-            "unset" => Ok(Stmt::Unset { name: rest.trim().to_owned() }),
+            "unset" => Ok(Stmt::Unset {
+                name: rest.trim().to_owned(),
+            }),
             "return" => {
                 let v = rest.trim();
                 Ok(Stmt::Return {
-                    value: if v.is_empty() { None } else { Some(v.to_owned()) },
+                    value: if v.is_empty() {
+                        None
+                    } else {
+                        Some(v.to_owned())
+                    },
                 })
             }
             "break" => Ok(Stmt::Break),
@@ -207,8 +215,12 @@ impl StmtParser {
                 };
                 Ok(Stmt::Echo { text, newline })
             }
-            "send" => Ok(Stmt::Send { text: rest.to_owned() }),
-            "expr" => Ok(Stmt::Expr { src: rest.to_owned() }),
+            "send" => Ok(Stmt::Send {
+                text: rest.to_owned(),
+            }),
+            "expr" => Ok(Stmt::Expr {
+                src: rest.to_owned(),
+            }),
             "addworld" => {
                 let args = rest.split_whitespace().map(str::to_owned).collect();
                 Ok(Stmt::AddWorld { args })
@@ -237,7 +249,11 @@ impl StmtParser {
             Vec::new() // was /endif
         };
 
-        Ok(Stmt::If { cond, then_block, else_block })
+        Ok(Stmt::If {
+            cond,
+            then_block,
+            else_block,
+        })
     }
 
     fn parse_while(&mut self, rest: &str) -> Result<Stmt, String> {
@@ -259,7 +275,12 @@ impl StmtParser {
         let step = parts[2].trim().to_owned();
         let body = self.parse_block_until(Some(&["done"]))?;
         self.advance();
-        Ok(Stmt::For { init, cond, step, body })
+        Ok(Stmt::For {
+            init,
+            cond,
+            step,
+            body,
+        })
     }
 }
 
@@ -276,7 +297,7 @@ fn split_cmd(line: &str) -> (&str, &str) {
     let line = line.trim_start_matches('/');
     match line.find(char::is_whitespace) {
         Some(i) => (&line[..i], line[i + 1..].trim_start()),
-        None    => (line, ""),
+        None => (line, ""),
     }
 }
 
@@ -296,7 +317,7 @@ fn parse_let_or_set(rest: &str, is_let: bool) -> Stmt {
     } else {
         // `/set name value`
         let mut parts = rest.splitn(2, char::is_whitespace);
-        let name  = parts.next().unwrap_or("").trim().to_owned();
+        let name = parts.next().unwrap_or("").trim().to_owned();
         let value = parts.next().unwrap_or("").trim().to_owned();
         (name, value)
     };
@@ -337,7 +358,13 @@ mod tests {
     #[test]
     fn echo_no_newline() {
         let stmts = parse("/echo -n no newline here");
-        assert!(matches!(&stmts[0], Stmt::Echo { text: _, newline: false }));
+        assert!(matches!(
+            &stmts[0],
+            Stmt::Echo {
+                text: _,
+                newline: false
+            }
+        ));
     }
 
     #[test]
@@ -369,7 +396,12 @@ mod tests {
         let src = "/if (x > 0)\n/echo positive\n/endif";
         let stmts = parse(src);
         assert_eq!(stmts.len(), 1);
-        if let Stmt::If { cond, then_block, else_block } = &stmts[0] {
+        if let Stmt::If {
+            cond,
+            then_block,
+            else_block,
+        } = &stmts[0]
+        {
             assert_eq!(cond, "x > 0");
             assert_eq!(then_block.len(), 1);
             assert!(else_block.is_empty());
@@ -382,7 +414,12 @@ mod tests {
     fn if_else_endif() {
         let src = "/if (x > 0)\n/echo pos\n/else\n/echo neg\n/endif";
         let stmts = parse(src);
-        if let Stmt::If { cond, then_block, else_block } = &stmts[0] {
+        if let Stmt::If {
+            cond,
+            then_block,
+            else_block,
+        } = &stmts[0]
+        {
             assert_eq!(cond, "x > 0");
             assert_eq!(then_block.len(), 1);
             assert_eq!(else_block.len(), 1);
@@ -436,12 +473,18 @@ mod tests {
     #[test]
     fn missing_endif_is_error() {
         let res = parse_script("/if (x > 0)\n/echo hi");
-        assert!(res.is_err(), "expected parse_script to return Err for missing /endif");
+        assert!(
+            res.is_err(),
+            "expected parse_script to return Err for missing /endif"
+        );
     }
 
     #[test]
     fn missing_done_is_error() {
         let res = parse_script("/while (i < 3)\n/echo hi");
-        assert!(res.is_err(), "expected parse_script to return Err for missing /done");
+        assert!(
+            res.is_err(),
+            "expected parse_script to return Err for missing /done"
+        );
     }
 }
