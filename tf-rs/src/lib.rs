@@ -1,5 +1,7 @@
 pub mod attr;
 pub mod config;
+pub mod hook;
+pub mod macros;
 pub mod pattern;
 pub mod script;
 pub mod tfstr;

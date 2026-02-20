@@ -60,6 +60,23 @@ pub struct Pattern {
     compiled: Compiled,
 }
 
+impl std::fmt::Debug for Pattern {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Pattern")
+            .field("src", &self.src)
+            .field("mode", &self.mode)
+            .finish()
+    }
+}
+
+impl Clone for Pattern {
+    /// Recompile from source.  Panics only if the original was valid but
+    /// recompilation somehow fails (shouldn't happen in practice).
+    fn clone(&self) -> Self {
+        Pattern::new(&self.src, self.mode).expect("Pattern::clone: recompile failed")
+    }
+}
+
 impl Pattern {
     /// Compile `src` using `mode`.
     ///
