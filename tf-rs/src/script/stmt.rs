@@ -432,4 +432,16 @@ mod tests {
         let stmts = parse("/def foo=bar");
         assert!(matches!(&stmts[0], Stmt::Command { name, .. } if name == "def"));
     }
+
+    #[test]
+    fn missing_endif_is_error() {
+        let res = parse_script("/if (x > 0)\n/echo hi");
+        assert!(res.is_err(), "expected parse_script to return Err for missing /endif");
+    }
+
+    #[test]
+    fn missing_done_is_error() {
+        let res = parse_script("/while (i < 3)\n/echo hi");
+        assert!(res.is_err(), "expected parse_script to return Err for missing /done");
+    }
 }
