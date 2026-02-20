@@ -1,6 +1,9 @@
 pub mod attr;
 pub mod config;
+pub mod history;
 pub mod hook;
+pub mod input;
+pub mod keybind;
 pub mod macros;
 pub mod pattern;
 pub mod screen;
