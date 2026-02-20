@@ -26,3 +26,6 @@ src/tfdefs.h
 src/default
 unix/vars.mak
 Makefile
+
+# Rust build artifacts
+target/

@@ -1,0 +1,11 @@
+[package]
+name = "tf"
+version = "0.1.0"
+edition = "2021"
+description = "TinyFugue MUD client (Rust rewrite)"
+
+[[bin]]
+name = "tf-rust"
+path = "src/main.rs"
+
+[dependencies]
