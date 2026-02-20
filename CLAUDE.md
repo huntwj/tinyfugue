@@ -85,6 +85,20 @@ When adding a new hook, command, or variable, update the corresponding list head
 
 TF has its own string abstraction (`dstring.h`): `String` (mutable) and `conString` (immutable/literal). These are distinct from `char *`. The `malloc.h` header wraps allocation with optional debug tracing.
 
+## Rust Rewrite (`tf-rs/`)
+
+The root `Cargo.toml` is a workspace with `tf-rs/` as its only member.
+
+```bash
+cargo build          # build
+cargo test           # run tests
+cargo clippy         # lint — must be clean before committing
+```
+
+**All Rust commits must have zero `cargo clippy` warnings.** Run clippy and fix any warnings before creating a changeset.
+
+---
+
 ### Configuration flow
 
 `configure.ac` → autoconf → `src/Makefile` (assembled by concatenating `unix/vars.mak`, `src/vars.mak`, `unix/unix.mak`, `src/rules.mak`). Feature flags become `#define`s in `src/tfconfig.h`. Feature-dependent code is guarded by `#ifdef HAVE_SSL`, `#ifdef WIDECHAR`, `#ifdef ENABLE_GMCP`, etc.
