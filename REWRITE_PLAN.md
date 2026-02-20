@@ -14,7 +14,7 @@ This is a gradual, *strangler-fig* rewrite: the C binary continues to work throu
 
 - [x] Create `rust/` Cargo workspace with a `tf` binary crate
 - [x] Add `just build-rust` and `just run-rust` tasks
-- [ ] Add Rust build to CI (`build.yml`)
+- [x] Add Rust build to CI (`build.yml`)
 
 ---
 

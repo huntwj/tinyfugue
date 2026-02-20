@@ -63,6 +63,15 @@ jobs:
       - name: Install
         run: make install
 
+  build-rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: cargo build
+      - name: Test
+        run: cargo test
+
   # disable for now
   build_windows:
     # disable for now
