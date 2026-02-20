@@ -13,3 +13,4 @@ name = "tf-rust"
 path = "src/main.rs"
 
 [dependencies]
+regex = "1"

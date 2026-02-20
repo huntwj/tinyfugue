@@ -25,14 +25,6 @@ impl TfStr {
         Self::default()
     }
 
-    /// Create a `TfStr` from a string slice with no per-character attributes.
-    pub fn from_str(s: &str) -> Self {
-        Self {
-            data: s.to_owned(),
-            char_attrs: None,
-        }
-    }
-
     /// Length in bytes (matching [`str::len`]).
     pub fn len(&self) -> usize {
         self.data.len()
@@ -111,7 +103,17 @@ impl TfStr {
 
 impl From<&str> for TfStr {
     fn from(s: &str) -> Self {
-        Self::from_str(s)
+        Self {
+            data: s.to_owned(),
+            char_attrs: None,
+        }
+    }
+}
+
+impl std::str::FromStr for TfStr {
+    type Err = std::convert::Infallible;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(s.into())
     }
 }
 
@@ -137,7 +139,7 @@ mod tests {
 
     #[test]
     fn plain_string_has_no_attrs() {
-        let s = TfStr::from_str("hello");
+        let s = TfStr::from("hello");
         assert_eq!(s.len(), 5);
         assert_eq!(s.char_count(), 5);
         assert!(s.char_attrs().is_none());
@@ -182,7 +184,7 @@ mod tests {
 
     #[test]
     fn chars_and_attrs_plain() {
-        let s = TfStr::from_str("ab");
+        let s = TfStr::from("ab");
         let pairs: Vec<_> = s.chars_and_attrs().collect();
         assert_eq!(pairs, vec![('a', Attr::EMPTY), ('b', Attr::EMPTY)]);
     }
@@ -211,7 +213,7 @@ mod tests {
 
     #[test]
     fn display_impl() {
-        let s = TfStr::from_str("world");
+        let s = TfStr::from("world");
         assert_eq!(format!("{s}"), "world");
     }
 }
