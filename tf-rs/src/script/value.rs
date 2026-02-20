@@ -83,7 +83,8 @@ impl Value {
     /// Determine the common numeric type for a binary operation.
     fn numeric_promote(a: &Value, b: &Value) -> (f64, f64, bool) {
         // Returns (a_f64, b_f64, is_float)
-        let is_float = matches!(a, Value::Float(_)) || matches!(b, Value::Float(_))
+        let is_float = matches!(a, Value::Float(_))
+            || matches!(b, Value::Float(_))
             || matches!(a, Value::Str(_)) && a.as_str().contains('.')
             || matches!(b, Value::Str(_)) && b.as_str().contains('.');
         (a.as_float(), b.as_float(), is_float)
@@ -213,6 +214,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::approx_constant)]
     fn display_float() {
         assert_eq!(Value::Float(3.14).to_string(), "3.14");
         assert_eq!(Value::Float(1.0).to_string(), "1.0");

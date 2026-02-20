@@ -65,8 +65,8 @@ pub enum Token {
     ShiftRight,
 
     // Comparison
-    Eq,     // ==
-    Ne,     // !=
+    Eq, // ==
+    Ne, // !=
     Lt,
     Le,
     Gt,
@@ -75,8 +75,8 @@ pub enum Token {
     RegexMatch, // =/
 
     // Logical
-    And,    // &&
-    Or,     // ||
+    And, // &&
+    Or,  // ||
 
     // Assignment
     Assign,        // =
@@ -104,7 +104,10 @@ struct Lexer<'a> {
 
 impl<'a> Lexer<'a> {
     fn new(src: &'a str) -> Self {
-        Lexer { src: src.as_bytes(), pos: 0 }
+        Lexer {
+            src: src.as_bytes(),
+            pos: 0,
+        }
     }
 
     fn peek(&self) -> Option<u8> {
@@ -117,7 +120,9 @@ impl<'a> Lexer<'a> {
 
     fn advance(&mut self) -> Option<u8> {
         let ch = self.src.get(self.pos).copied();
-        if ch.is_some() { self.pos += 1; }
+        if ch.is_some() {
+            self.pos += 1;
+        }
         ch
     }
 
@@ -184,14 +189,12 @@ impl<'a> Lexer<'a> {
         loop {
             match self.advance() {
                 None | Some(b'\n') => break,
-                Some(b'\\') => {
-                    match self.advance() {
-                        Some(b'n') => s.push('\n'),
-                        Some(b't') => s.push('\t'),
-                        Some(c) => s.push(c as char),
-                        None => break,
-                    }
-                }
+                Some(b'\\') => match self.advance() {
+                    Some(b'n') => s.push('\n'),
+                    Some(b't') => s.push('\t'),
+                    Some(c) => s.push(c as char),
+                    None => break,
+                },
                 Some(c) if c == quote => break,
                 Some(c) => s.push(c as char),
             }
@@ -202,7 +205,10 @@ impl<'a> Lexer<'a> {
     fn read_ident(&mut self, first: u8) -> Token {
         let mut s = String::new();
         s.push(first as char);
-        while matches!(self.peek(), Some(b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_')) {
+        while matches!(
+            self.peek(),
+            Some(b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_')
+        ) {
             s.push(self.advance().unwrap() as char);
         }
         Token::Ident(s)
@@ -220,31 +226,92 @@ impl<'a> Lexer<'a> {
             b'"' => self.read_string(b'"'),
             b'\'' => self.read_string(b'\''),
             b'a'..=b'z' | b'A'..=b'Z' | b'_' => self.read_ident(ch),
-            b'+' => if self.eat(b'=') { Token::PlusAssign } else { Token::Plus },
-            b'-' => if self.eat(b'=') { Token::MinusAssign } else { Token::Minus },
-            b'*' => if self.eat(b'=') { Token::StarAssign } else { Token::Star },
-            b'/' => if self.eat(b'=') { Token::SlashAssign } else { Token::Slash },
-            b'%' => if self.eat(b'=') { Token::PercentAssign } else { Token::Percent },
-            b'!' => if self.eat(b'=') { Token::Ne } else { Token::Bang },
+            b'+' => {
+                if self.eat(b'=') {
+                    Token::PlusAssign
+                } else {
+                    Token::Plus
+                }
+            }
+            b'-' => {
+                if self.eat(b'=') {
+                    Token::MinusAssign
+                } else {
+                    Token::Minus
+                }
+            }
+            b'*' => {
+                if self.eat(b'=') {
+                    Token::StarAssign
+                } else {
+                    Token::Star
+                }
+            }
+            b'/' => {
+                if self.eat(b'=') {
+                    Token::SlashAssign
+                } else {
+                    Token::Slash
+                }
+            }
+            b'%' => {
+                if self.eat(b'=') {
+                    Token::PercentAssign
+                } else {
+                    Token::Percent
+                }
+            }
+            b'!' => {
+                if self.eat(b'=') {
+                    Token::Ne
+                } else {
+                    Token::Bang
+                }
+            }
             b'~' => Token::Tilde,
             b'^' => Token::Caret,
-            b'&' => if self.eat(b'&') { Token::And } else { Token::Ampersand },
-            b'|' => if self.eat(b'|') { Token::Or } else { Token::Pipe },
+            b'&' => {
+                if self.eat(b'&') {
+                    Token::And
+                } else {
+                    Token::Ampersand
+                }
+            }
+            b'|' => {
+                if self.eat(b'|') {
+                    Token::Or
+                } else {
+                    Token::Pipe
+                }
+            }
             b'<' => {
-                if self.eat(b'<') { Token::ShiftLeft }
-                else if self.eat(b'=') { Token::Le }
-                else { Token::Lt }
+                if self.eat(b'<') {
+                    Token::ShiftLeft
+                } else if self.eat(b'=') {
+                    Token::Le
+                } else {
+                    Token::Lt
+                }
             }
             b'>' => {
-                if self.eat(b'>') { Token::ShiftRight }
-                else if self.eat(b'=') { Token::Ge }
-                else { Token::Gt }
+                if self.eat(b'>') {
+                    Token::ShiftRight
+                } else if self.eat(b'=') {
+                    Token::Ge
+                } else {
+                    Token::Gt
+                }
             }
             b'=' => {
-                if self.eat(b'=') { Token::Eq }
-                else if self.eat(b'~') { Token::GlobMatch }
-                else if self.eat(b'/') { Token::RegexMatch }
-                else { Token::Assign }
+                if self.eat(b'=') {
+                    Token::Eq
+                } else if self.eat(b'~') {
+                    Token::GlobMatch
+                } else if self.eat(b'/') {
+                    Token::RegexMatch
+                } else {
+                    Token::Assign
+                }
             }
             b'?' => Token::Question,
             b':' => Token::Colon,
@@ -261,7 +328,9 @@ impl<'a> Lexer<'a> {
             let t = self.next_token();
             let done = t == Token::Eof;
             tokens.push(t);
-            if done { break; }
+            if done {
+                break;
+            }
         }
         tokens
     }
@@ -271,23 +340,43 @@ impl<'a> Lexer<'a> {
 
 #[derive(Debug, Clone)]
 pub enum BinOp {
-    Add, Sub, Mul, Div, Rem,
-    Eq, Ne, Lt, Le, Gt, Ge,
-    And, Or,
-    BitAnd, BitOr, BitXor,
-    Shl, Shr,
-    GlobMatch, RegexMatch,
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Rem,
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    And,
+    Or,
+    BitAnd,
+    BitOr,
+    BitXor,
+    Shl,
+    Shr,
+    GlobMatch,
+    RegexMatch,
 }
 
 #[derive(Debug, Clone)]
 pub enum UnaryOp {
-    Neg, Not, BitNot,
+    Neg,
+    Not,
+    BitNot,
 }
 
 #[derive(Debug, Clone)]
 pub enum AssignOp {
     Set,
-    Add, Sub, Mul, Div, Rem,
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Rem,
 }
 
 #[derive(Debug, Clone)]
@@ -356,11 +445,11 @@ impl Parser {
         // Look-ahead: if next token is Ident followed by an assign op, parse as assignment.
         if let Token::Ident(name) = self.peek().clone() {
             let op = match self.tokens.get(self.pos + 1) {
-                Some(Token::Assign)        => Some(AssignOp::Set),
-                Some(Token::PlusAssign)    => Some(AssignOp::Add),
-                Some(Token::MinusAssign)   => Some(AssignOp::Sub),
-                Some(Token::StarAssign)    => Some(AssignOp::Mul),
-                Some(Token::SlashAssign)   => Some(AssignOp::Div),
+                Some(Token::Assign) => Some(AssignOp::Set),
+                Some(Token::PlusAssign) => Some(AssignOp::Add),
+                Some(Token::MinusAssign) => Some(AssignOp::Sub),
+                Some(Token::StarAssign) => Some(AssignOp::Mul),
+                Some(Token::SlashAssign) => Some(AssignOp::Div),
                 Some(Token::PercentAssign) => Some(AssignOp::Rem),
                 _ => None,
             };
@@ -381,7 +470,11 @@ impl Parser {
                 return Err("expected ':' in ternary".into());
             }
             let else_ = self.parse_ternary()?;
-            Ok(Expr::Ternary(Box::new(cond), Box::new(then), Box::new(else_)))
+            Ok(Expr::Ternary(
+                Box::new(cond),
+                Box::new(then),
+                Box::new(else_),
+            ))
         } else {
             Ok(cond)
         }
@@ -409,13 +502,13 @@ impl Parser {
         let mut lhs = self.parse_bitor()?;
         loop {
             let op = match self.peek() {
-                Token::Eq         => BinOp::Eq,
-                Token::Ne         => BinOp::Ne,
-                Token::Lt         => BinOp::Lt,
-                Token::Le         => BinOp::Le,
-                Token::Gt         => BinOp::Gt,
-                Token::Ge         => BinOp::Ge,
-                Token::GlobMatch  => BinOp::GlobMatch,
+                Token::Eq => BinOp::Eq,
+                Token::Ne => BinOp::Ne,
+                Token::Lt => BinOp::Lt,
+                Token::Le => BinOp::Le,
+                Token::Gt => BinOp::Gt,
+                Token::Ge => BinOp::Ge,
+                Token::GlobMatch => BinOp::GlobMatch,
                 Token::RegexMatch => BinOp::RegexMatch,
                 _ => break,
             };
@@ -457,7 +550,7 @@ impl Parser {
         let mut lhs = self.parse_additive()?;
         loop {
             let op = match self.peek() {
-                Token::ShiftLeft  => BinOp::Shl,
+                Token::ShiftLeft => BinOp::Shl,
                 Token::ShiftRight => BinOp::Shr,
                 _ => break,
             };
@@ -472,7 +565,7 @@ impl Parser {
         let mut lhs = self.parse_multiplicative()?;
         loop {
             let op = match self.peek() {
-                Token::Plus  => BinOp::Add,
+                Token::Plus => BinOp::Add,
                 Token::Minus => BinOp::Sub,
                 _ => break,
             };
@@ -487,8 +580,8 @@ impl Parser {
         let mut lhs = self.parse_unary()?;
         loop {
             let op = match self.peek() {
-                Token::Star    => BinOp::Mul,
-                Token::Slash   => BinOp::Div,
+                Token::Star => BinOp::Mul,
+                Token::Slash => BinOp::Div,
                 Token::Percent => BinOp::Rem,
                 _ => break,
             };
@@ -501,9 +594,18 @@ impl Parser {
 
     fn parse_unary(&mut self) -> Result<Expr, String> {
         match self.peek() {
-            Token::Minus => { self.pos += 1; Ok(Expr::Unary(UnaryOp::Neg, Box::new(self.parse_unary()?))) }
-            Token::Bang  => { self.pos += 1; Ok(Expr::Unary(UnaryOp::Not, Box::new(self.parse_unary()?))) }
-            Token::Tilde => { self.pos += 1; Ok(Expr::Unary(UnaryOp::BitNot, Box::new(self.parse_unary()?))) }
+            Token::Minus => {
+                self.pos += 1;
+                Ok(Expr::Unary(UnaryOp::Neg, Box::new(self.parse_unary()?)))
+            }
+            Token::Bang => {
+                self.pos += 1;
+                Ok(Expr::Unary(UnaryOp::Not, Box::new(self.parse_unary()?)))
+            }
+            Token::Tilde => {
+                self.pos += 1;
+                Ok(Expr::Unary(UnaryOp::BitNot, Box::new(self.parse_unary()?)))
+            }
             _ => self.parse_primary(),
         }
     }
@@ -511,9 +613,9 @@ impl Parser {
     fn parse_primary(&mut self) -> Result<Expr, String> {
         let tok = self.advance();
         match tok {
-            Token::Int(n)   => Ok(Expr::Literal(Value::Int(n))),
+            Token::Int(n) => Ok(Expr::Literal(Value::Int(n))),
             Token::Float(x) => Ok(Expr::Literal(Value::Float(x))),
-            Token::Str(s)   => Ok(Expr::Literal(Value::Str(s))),
+            Token::Str(s) => Ok(Expr::Literal(Value::Str(s))),
             Token::Ident(name) => {
                 if self.eat(&Token::LParen) {
                     // Function call
@@ -564,8 +666,8 @@ pub fn eval_expr(expr: &Expr, ctx: &mut dyn EvalContext) -> Result<Value, String
         Expr::Unary(op, inner) => {
             let v = eval_expr(inner, ctx)?;
             Ok(match op {
-                UnaryOp::Neg    => v.arith_neg(),
-                UnaryOp::Not    => Value::Int(if v.as_bool() { 0 } else { 1 }),
+                UnaryOp::Neg => v.arith_neg(),
+                UnaryOp::Not => Value::Int(if v.as_bool() { 0 } else { 1 }),
                 UnaryOp::BitNot => Value::Int(!v.as_int()),
             })
         }
@@ -575,13 +677,17 @@ pub fn eval_expr(expr: &Expr, ctx: &mut dyn EvalContext) -> Result<Value, String
             match op {
                 BinOp::And => {
                     let l = eval_expr(lhs, ctx)?;
-                    if !l.as_bool() { return Ok(Value::Int(0)); }
+                    if !l.as_bool() {
+                        return Ok(Value::Int(0));
+                    }
                     let r = eval_expr(rhs, ctx)?;
                     return Ok(Value::Int(if r.as_bool() { 1 } else { 0 }));
                 }
                 BinOp::Or => {
                     let l = eval_expr(lhs, ctx)?;
-                    if l.as_bool() { return Ok(Value::Int(1)); }
+                    if l.as_bool() {
+                        return Ok(Value::Int(1));
+                    }
                     let r = eval_expr(rhs, ctx)?;
                     return Ok(Value::Int(if r.as_bool() { 1 } else { 0 }));
                 }
@@ -594,7 +700,11 @@ pub fn eval_expr(expr: &Expr, ctx: &mut dyn EvalContext) -> Result<Value, String
 
         Expr::Ternary(cond, then, else_) => {
             let c = eval_expr(cond, ctx)?;
-            if c.as_bool() { eval_expr(then, ctx) } else { eval_expr(else_, ctx) }
+            if c.as_bool() {
+                eval_expr(then, ctx)
+            } else {
+                eval_expr(else_, ctx)
+            }
         }
 
         Expr::Assign(name, op, rhs) => {
@@ -634,12 +744,7 @@ pub fn eval_expr(expr: &Expr, ctx: &mut dyn EvalContext) -> Result<Value, String
     }
 }
 
-fn eval_binop(
-    op: &BinOp,
-    l: Value,
-    r: Value,
-    _ctx: &mut dyn EvalContext,
-) -> Result<Value, String> {
+fn eval_binop(op: &BinOp, l: Value, r: Value, _ctx: &mut dyn EvalContext) -> Result<Value, String> {
     use std::cmp::Ordering;
     match op {
         BinOp::Add => Ok(l.arith_add(&r)),
@@ -648,27 +753,55 @@ fn eval_binop(
         BinOp::Div => l.arith_div(&r),
         BinOp::Rem => l.arith_rem(&r),
 
-        BinOp::Eq => Ok(Value::Int(if l.cmp_value(&r) == Ordering::Equal { 1 } else { 0 })),
-        BinOp::Ne => Ok(Value::Int(if l.cmp_value(&r) != Ordering::Equal { 1 } else { 0 })),
-        BinOp::Lt => Ok(Value::Int(if l.cmp_value(&r) == Ordering::Less  { 1 } else { 0 })),
-        BinOp::Le => Ok(Value::Int(if matches!(l.cmp_value(&r), Ordering::Less | Ordering::Equal) { 1 } else { 0 })),
-        BinOp::Gt => Ok(Value::Int(if l.cmp_value(&r) == Ordering::Greater { 1 } else { 0 })),
-        BinOp::Ge => Ok(Value::Int(if matches!(l.cmp_value(&r), Ordering::Greater | Ordering::Equal) { 1 } else { 0 })),
+        BinOp::Eq => Ok(Value::Int(if l.cmp_value(&r) == Ordering::Equal {
+            1
+        } else {
+            0
+        })),
+        BinOp::Ne => Ok(Value::Int(if l.cmp_value(&r) != Ordering::Equal {
+            1
+        } else {
+            0
+        })),
+        BinOp::Lt => Ok(Value::Int(if l.cmp_value(&r) == Ordering::Less {
+            1
+        } else {
+            0
+        })),
+        BinOp::Le => Ok(Value::Int(
+            if matches!(l.cmp_value(&r), Ordering::Less | Ordering::Equal) {
+                1
+            } else {
+                0
+            },
+        )),
+        BinOp::Gt => Ok(Value::Int(if l.cmp_value(&r) == Ordering::Greater {
+            1
+        } else {
+            0
+        })),
+        BinOp::Ge => Ok(Value::Int(
+            if matches!(l.cmp_value(&r), Ordering::Greater | Ordering::Equal) {
+                1
+            } else {
+                0
+            },
+        )),
 
         BinOp::BitAnd => Ok(Value::Int(l.as_int() & r.as_int())),
-        BinOp::BitOr  => Ok(Value::Int(l.as_int() | r.as_int())),
+        BinOp::BitOr => Ok(Value::Int(l.as_int() | r.as_int())),
         BinOp::BitXor => Ok(Value::Int(l.as_int() ^ r.as_int())),
-        BinOp::Shl    => Ok(Value::Int(l.as_int() << (r.as_int() & 63))),
-        BinOp::Shr    => Ok(Value::Int(l.as_int() >> (r.as_int() & 63))),
+        BinOp::Shl => Ok(Value::Int(l.as_int() << (r.as_int() & 63))),
+        BinOp::Shr => Ok(Value::Int(l.as_int() >> (r.as_int() & 63))),
 
-        BinOp::GlobMatch  => {
-            let text    = l.as_str();
+        BinOp::GlobMatch => {
+            let text = l.as_str();
             let pattern = r.as_str();
             Ok(Value::Int(if glob_match(&pattern, &text) { 1 } else { 0 }))
         }
         BinOp::RegexMatch => {
             // Use the pattern module's regex support if available; fall back to literal match.
-            let text    = l.as_str();
+            let text = l.as_str();
             let pattern = r.as_str();
             Ok(Value::Int(if regex_match(&pattern, &text) { 1 } else { 0 }))
         }
@@ -690,7 +823,11 @@ fn glob_match_inner(p: &[char], t: &[char]) -> bool {
         (None, None) => true,
         (Some('*'), _) => {
             // Skip consecutive stars
-            let rest_p = p.iter().position(|&c| c != '*').map(|i| &p[i..]).unwrap_or(&[]);
+            let rest_p = p
+                .iter()
+                .position(|&c| c != '*')
+                .map(|i| &p[i..])
+                .unwrap_or(&[]);
             // Try matching rest_p against every suffix of t
             for i in 0..=t.len() {
                 if glob_match_inner(rest_p, &t[i..]) {
@@ -731,16 +868,33 @@ mod tests {
     }
 
     impl TestCtx {
-        fn new() -> Self { TestCtx { vars: HashMap::new() } }
-        fn with(mut self, k: &str, v: Value) -> Self { self.vars.insert(k.into(), v); self }
+        fn new() -> Self {
+            TestCtx {
+                vars: HashMap::new(),
+            }
+        }
+        fn with(mut self, k: &str, v: Value) -> Self {
+            self.vars.insert(k.into(), v);
+            self
+        }
     }
 
     impl EvalContext for TestCtx {
-        fn get_var(&self, name: &str) -> Option<Value> { self.vars.get(name).cloned() }
-        fn set_local(&mut self, name: &str, value: Value) { self.vars.insert(name.into(), value); }
-        fn set_global(&mut self, name: &str, value: Value) { self.vars.insert(name.into(), value); }
-        fn positional_params(&self) -> &[String] { &[] }
-        fn current_cmd_name(&self) -> &str { "" }
+        fn get_var(&self, name: &str) -> Option<Value> {
+            self.vars.get(name).cloned()
+        }
+        fn set_local(&mut self, name: &str, value: Value) {
+            self.vars.insert(name.into(), value);
+        }
+        fn set_global(&mut self, name: &str, value: Value) {
+            self.vars.insert(name.into(), value);
+        }
+        fn positional_params(&self) -> &[String] {
+            &[]
+        }
+        fn current_cmd_name(&self) -> &str {
+            ""
+        }
         fn call_fn(&mut self, _name: &str, _args: Vec<Value>) -> Result<Value, String> {
             Err("no functions in test ctx".into())
         }
@@ -758,6 +912,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::approx_constant)]
     fn literals() {
         assert_eq!(eval("42"), Value::Int(42));
         assert_eq!(eval("3.14"), Value::Float(3.14));
