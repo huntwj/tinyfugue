@@ -27,5 +27,8 @@ src/default
 unix/vars.mak
 Makefile
 
+# Editor
+.vscode/
+
 # Rust build artifacts
 target/

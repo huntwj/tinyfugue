@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2021"
 description = "TinyFugue MUD client (Rust rewrite)"
 
+[lib]
+name = "tf"
+path = "src/lib.rs"
+
 [[bin]]
 name = "tf-rust"
 path = "src/main.rs"
