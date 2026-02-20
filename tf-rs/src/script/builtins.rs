@@ -1,0 +1,334 @@
+//! Built-in TF functions.
+//!
+//! Each function receives a `Vec<Value>` of already-evaluated arguments and
+//! returns `Result<Value, String>`.  The dispatcher is called from the
+//! interpreter's `call_fn` implementation.
+
+use super::value::Value;
+
+/// Dispatch a built-in function call.
+///
+/// Returns `None` if the function name is not a built-in (caller should then
+/// try user-defined macros or return an error).
+pub fn call_builtin(name: &str, args: Vec<Value>) -> Option<Result<Value, String>> {
+    // Inner function returns Result<Option<Value>, String>:
+    //   Ok(None)    → not a builtin
+    //   Ok(Some(v)) → success
+    //   Err(e)      → builtin call failed
+    // `.transpose()` converts that to Option<Result<Value, String>>.
+    fn inner(name: &str, args: Vec<Value>) -> Result<Option<Value>, String> {
+        Ok(Some(match name {
+            // ── String functions ─────────────────────────────────────────────
+            "strlen" => {
+                let s = get_str(&args, 0, name)?;
+                Value::Int(s.chars().count() as i64)
+            }
+            "strcat" => {
+                let mut out = String::new();
+                for a in &args { out.push_str(&a.as_str()); }
+                Value::Str(out)
+            }
+            "substr" => {
+                let s   = get_str(&args, 0, name)?;
+                let pos = get_int(&args, 1, name)? as usize;
+                let len_arg = args.get(2).map(|v| v.as_int() as usize);
+                let chars: Vec<char> = s.chars().collect();
+                let start = pos.min(chars.len());
+                let slice = match len_arg {
+                    Some(n) => &chars[start..((start + n).min(chars.len()))],
+                    None    => &chars[start..],
+                };
+                Value::Str(slice.iter().collect())
+            }
+            "strcmp" => {
+                let a = get_str(&args, 0, name)?;
+                let b = get_str(&args, 1, name)?;
+                Value::Int(match a.cmp(&b) {
+                    std::cmp::Ordering::Less    => -1,
+                    std::cmp::Ordering::Equal   =>  0,
+                    std::cmp::Ordering::Greater =>  1,
+                })
+            }
+            "strncmp" => {
+                let a = get_str(&args, 0, name)?;
+                let b = get_str(&args, 1, name)?;
+                let n = get_int(&args, 2, name)? as usize;
+                let ac: String = a.chars().take(n).collect();
+                let bc: String = b.chars().take(n).collect();
+                Value::Int(match ac.cmp(&bc) {
+                    std::cmp::Ordering::Less    => -1,
+                    std::cmp::Ordering::Equal   =>  0,
+                    std::cmp::Ordering::Greater =>  1,
+                })
+            }
+            "toupper" => {
+                let s = get_str(&args, 0, name)?;
+                Value::Str(s.to_uppercase())
+            }
+            "tolower" => {
+                let s = get_str(&args, 0, name)?;
+                Value::Str(s.to_lowercase())
+            }
+            "strstr" => {
+                let haystack = get_str(&args, 0, name)?;
+                let needle   = get_str(&args, 1, name)?;
+                Value::Int(match haystack.find(&needle) {
+                    Some(i) => i as i64,
+                    None    => -1,
+                })
+            }
+            "strrep" => {
+                // strrep(str, count) — repeat str n times
+                let s = get_str(&args, 0, name)?;
+                let n = get_int(&args, 1, name)?.max(0) as usize;
+                Value::Str(s.repeat(n))
+            }
+            "replace" => {
+                // replace(haystack, needle, replacement)
+                let haystack = get_str(&args, 0, name)?;
+                let needle   = get_str(&args, 1, name)?;
+                let repl     = get_str(&args, 2, name)?;
+                Value::Str(haystack.replace(&needle, &repl))
+            }
+            "pad" => {
+                // pad(str, width[, char]) — right-pad with spaces (or given char)
+                let s     = get_str(&args, 0, name)?;
+                let width = get_int(&args, 1, name)? as usize;
+                let pad_c = args.get(2)
+                    .map(|v| v.as_str().chars().next().unwrap_or(' '))
+                    .unwrap_or(' ');
+                let cur = s.chars().count();
+                let padded = if cur < width {
+                    let padding: String = std::iter::repeat_n(pad_c, width - cur).collect();
+                    s + &padding
+                } else {
+                    s
+                };
+                Value::Str(padded)
+            }
+
+            // ── Math functions ───────────────────────────────────────────────
+            "abs" => {
+                let v = args.into_iter().next().ok_or_else(|| format!("{name}: too few args"))?;
+                match v {
+                    Value::Int(n)   => Value::Int(n.abs()),
+                    Value::Float(x) => Value::Float(x.abs()),
+                    Value::Str(s)   => {
+                        if let Ok(n) = s.trim().parse::<i64>() { Value::Int(n.abs()) }
+                        else if let Ok(x) = s.trim().parse::<f64>() { Value::Float(x.abs()) }
+                        else { Value::Int(0) }
+                    }
+                }
+            }
+            "mod" => {
+                let a = get_int(&args, 0, name)?;
+                let b = get_int(&args, 1, name)?;
+                if b == 0 { return Err("mod: modulo by zero".into()); }
+                Value::Int(a % b)
+            }
+            "rand" => {
+                // Deterministic-ish: use a simple LCG with time-based seed.
+                let max = args.first().map(|v| v.as_int().max(1)).unwrap_or(100);
+                let seed = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.subsec_nanos())
+                    .unwrap_or(12345) as i64;
+                Value::Int(seed.abs() % max)
+            }
+            "trunc" => {
+                let x = get_float(&args, 0, name)?;
+                Value::Int(x.trunc() as i64)
+            }
+            "sqrt"  => Value::Float(get_float(&args, 0, name)?.sqrt()),
+            "sin"   => Value::Float(get_float(&args, 0, name)?.sin()),
+            "cos"   => Value::Float(get_float(&args, 0, name)?.cos()),
+            "tan"   => Value::Float(get_float(&args, 0, name)?.tan()),
+            "exp"   => Value::Float(get_float(&args, 0, name)?.exp()),
+            "ln"    => Value::Float(get_float(&args, 0, name)?.ln()),
+            "log10" => Value::Float(get_float(&args, 0, name)?.log10()),
+            "pow"   => {
+                let base = get_float(&args, 0, name)?;
+                let exp  = get_float(&args, 1, name)?;
+                Value::Float(base.powf(exp))
+            }
+            "asin"  => Value::Float(get_float(&args, 0, name)?.asin()),
+            "acos"  => Value::Float(get_float(&args, 0, name)?.acos()),
+            "atan"  => {
+                let y = get_float(&args, 0, name)?;
+                if args.len() >= 2 {
+                    let x = get_float(&args, 1, name)?;
+                    Value::Float(y.atan2(x))
+                } else {
+                    Value::Float(y.atan())
+                }
+            }
+
+            // ── Type inspection ──────────────────────────────────────────────
+            "whatis" => {
+                let v = args.into_iter().next().ok_or_else(|| format!("{name}: too few args"))?;
+                Value::Str(v.type_name().to_owned())
+            }
+            "systype" => {
+                Value::Str(std::env::consts::OS.to_owned())
+            }
+
+            // ── Character functions ───────────────────────────────────────────
+            "ascii" => {
+                // ascii(str) → ordinal of first character
+                let s = get_str(&args, 0, name)?;
+                let ch = s.chars().next().unwrap_or('\0');
+                Value::Int(ch as i64)
+            }
+            "char" => {
+                // char(n) → string containing that Unicode code point
+                let n = get_int(&args, 0, name)?;
+                let ch = char::from_u32(n as u32).unwrap_or('\u{FFFD}');
+                Value::Str(ch.to_string())
+            }
+
+            _ => return Ok(None),
+        }))
+    }
+
+    inner(name, args).transpose()
+}
+
+// ── Argument accessors ────────────────────────────────────────────────────────
+
+fn get_str(args: &[Value], idx: usize, name: &str) -> Result<String, String> {
+    args.get(idx)
+        .map(|v| v.as_str())
+        .ok_or_else(|| format!("{name}: argument {idx} missing"))
+}
+
+fn get_int(args: &[Value], idx: usize, name: &str) -> Result<i64, String> {
+    args.get(idx)
+        .map(|v| v.as_int())
+        .ok_or_else(|| format!("{name}: argument {idx} missing"))
+}
+
+fn get_float(args: &[Value], idx: usize, name: &str) -> Result<f64, String> {
+    args.get(idx)
+        .map(|v| v.as_float())
+        .ok_or_else(|| format!("{name}: argument {idx} missing"))
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn call(name: &str, args: Vec<Value>) -> Value {
+        call_builtin(name, args).expect("not a builtin").expect("call failed")
+    }
+
+    #[test]
+    fn strlen() {
+        assert_eq!(call("strlen", vec![Value::Str("hello".into())]), Value::Int(5));
+    }
+
+    #[test]
+    fn strcat() {
+        let v = call("strcat", vec![Value::Str("foo".into()), Value::Str("bar".into())]);
+        assert_eq!(v, Value::Str("foobar".into()));
+    }
+
+    #[test]
+    fn substr_from() {
+        let v = call("substr", vec![Value::Str("hello".into()), Value::Int(2)]);
+        assert_eq!(v, Value::Str("llo".into()));
+    }
+
+    #[test]
+    fn substr_with_len() {
+        let v = call("substr", vec![Value::Str("hello".into()), Value::Int(1), Value::Int(3)]);
+        assert_eq!(v, Value::Str("ell".into()));
+    }
+
+    #[test]
+    fn strcmp_lt() {
+        assert_eq!(call("strcmp", vec!["a".into(), "b".into()]), Value::Int(-1));
+    }
+
+    #[test]
+    fn strcmp_eq() {
+        assert_eq!(call("strcmp", vec!["x".into(), "x".into()]), Value::Int(0));
+    }
+
+    #[test]
+    fn toupper_lower() {
+        assert_eq!(call("toupper", vec!["Hello".into()]), Value::Str("HELLO".into()));
+        assert_eq!(call("tolower", vec!["Hello".into()]), Value::Str("hello".into()));
+    }
+
+    #[test]
+    fn strstr_found() {
+        assert_eq!(call("strstr", vec!["foobar".into(), "bar".into()]), Value::Int(3));
+    }
+
+    #[test]
+    fn strstr_not_found() {
+        assert_eq!(call("strstr", vec!["foobar".into(), "xyz".into()]), Value::Int(-1));
+    }
+
+    #[test]
+    fn strrep() {
+        assert_eq!(call("strrep", vec!["ab".into(), Value::Int(3)]), Value::Str("ababab".into()));
+    }
+
+    #[test]
+    fn replace_fn() {
+        let v = call("replace", vec!["hello world".into(), "world".into(), "Rust".into()]);
+        assert_eq!(v, Value::Str("hello Rust".into()));
+    }
+
+    #[test]
+    fn pad_fn() {
+        let v = call("pad", vec!["hi".into(), Value::Int(5)]);
+        assert_eq!(v, Value::Str("hi   ".into()));
+    }
+
+    #[test]
+    fn abs_int() {
+        assert_eq!(call("abs", vec![Value::Int(-7)]), Value::Int(7));
+    }
+
+    #[test]
+    fn abs_float() {
+        assert_eq!(call("abs", vec![Value::Float(-1.5)]), Value::Float(1.5));
+    }
+
+    #[test]
+    fn trunc_fn() {
+        assert_eq!(call("trunc", vec![Value::Float(3.9)]), Value::Int(3));
+    }
+
+    #[test]
+    fn sqrt_fn() {
+        assert_eq!(call("sqrt", vec![Value::Float(4.0)]), Value::Float(2.0));
+    }
+
+    #[test]
+    fn pow_fn() {
+        assert_eq!(call("pow", vec![Value::Float(2.0), Value::Float(10.0)]), Value::Float(1024.0));
+    }
+
+    #[test]
+    fn whatis() {
+        assert_eq!(call("whatis", vec![Value::Int(1)]),   Value::Str("integer".into()));
+        assert_eq!(call("whatis", vec![Value::Float(1.0)]), Value::Str("real".into()));
+        assert_eq!(call("whatis", vec!["hi".into()]),     Value::Str("string".into()));
+    }
+
+    #[test]
+    fn ascii_char() {
+        assert_eq!(call("ascii", vec!["A".into()]), Value::Int(65));
+        assert_eq!(call("char", vec![Value::Int(65)]), Value::Str("A".into()));
+    }
+
+    #[test]
+    fn unknown_builtin_returns_none() {
+        assert!(call_builtin("no_such_fn", vec![]).is_none());
+    }
+}
