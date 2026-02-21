@@ -16,6 +16,10 @@ path = "src/main.rs"
 regex = "1"
 aho-corasick = "0.7"
 crossterm = "0.28"
+tokio = { version = "1", features = ["net", "io-util", "rt-multi-thread", "macros"] }
+tokio-rustls = "0.26"
+webpki-roots = "0.26"
+flate2 = "1"
 
 [dev-dependencies]
 criterion = "0.5"
