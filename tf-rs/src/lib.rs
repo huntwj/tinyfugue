@@ -1,5 +1,6 @@
 pub mod attr;
 pub mod config;
+pub mod event_loop;
 pub mod history;
 pub mod hook;
 pub mod input;
@@ -7,6 +8,7 @@ pub mod keybind;
 pub mod macros;
 pub mod net;
 pub mod pattern;
+pub mod process;
 pub mod screen;
 pub mod script;
 pub mod telnet;

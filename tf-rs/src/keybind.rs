@@ -188,6 +188,15 @@ impl Keymap {
         self.bindings.get(sequence)
     }
 
+    /// Return `true` if any binding's key sequence *starts with* `prefix`
+    /// (but is longer than it).  Used by the event loop to decide whether to
+    /// wait for more bytes when accumulating multi-byte escape sequences.
+    pub fn has_prefix(&self, prefix: &[u8]) -> bool {
+        self.bindings
+            .keys()
+            .any(|seq| seq.len() > prefix.len() && seq.starts_with(prefix))
+    }
+
     /// Number of bindings in the map.
     pub fn len(&self) -> usize {
         self.bindings.len()

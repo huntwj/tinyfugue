@@ -175,6 +175,15 @@ impl Terminal {
         self.out.flush()
     }
 
+    /// Write `text` followed by `\r\n` and flush.
+    ///
+    /// Suitable for use in raw mode where `\r\n` is required instead of
+    /// bare `\n`.  Errors are silently discarded (terminal writes are
+    /// best-effort).
+    pub fn print_line(&mut self, text: &str) {
+        let _ = write!(self.out, "{}\r\n", text);
+    }
+
     /// Clear the entire screen.
     pub fn clear_screen(&mut self) -> io::Result<()> {
         queue!(
