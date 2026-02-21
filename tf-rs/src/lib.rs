@@ -2,6 +2,7 @@ pub mod attr;
 pub mod config;
 pub mod event_loop;
 pub mod lua;
+pub mod python;
 pub mod history;
 pub mod hook;
 pub mod input;
