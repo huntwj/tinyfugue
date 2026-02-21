@@ -6,6 +6,7 @@
 //! function calls.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use super::{
     builtins::call_builtin,
@@ -14,6 +15,36 @@ use super::{
     stmt::{parse_script, Stmt},
     value::Value,
 };
+
+// ── ScriptAction ──────────────────────────────────────────────────────────────
+
+/// A side-effect queued by the interpreter that requires event-loop involvement.
+///
+/// The interpreter is synchronous; these actions are drained by [`EventLoop`]
+/// after each [`Interpreter::exec_script`] call (or, for `/load`/`/eval`,
+/// processed inline by the interpreter's file loader).
+#[derive(Debug, Clone)]
+pub enum ScriptAction {
+    /// Send text to a world (`None` = active world).
+    SendToWorld { text: String, world: Option<String> },
+    /// Open a connection to a named world (or the default world if empty).
+    Connect { name: String },
+    /// Close a connection.
+    Disconnect { name: String },
+    /// Add / update a world definition.
+    AddWorld(crate::world::World),
+    /// Switch the active world.
+    SwitchWorld { name: String },
+    /// Terminate the event loop.
+    Quit,
+}
+
+// ── File loader callback ──────────────────────────────────────────────────────
+
+/// A callback that resolves a path string (after variable expansion) to the
+/// file's contents.  The loader is responsible for tilde expansion and file
+/// system access.
+pub type FileLoader = Arc<dyn Fn(&str) -> Result<String, String> + Send + Sync>;
 
 // ── ControlFlow ───────────────────────────────────────────────────────────────
 
@@ -45,6 +76,10 @@ pub struct Interpreter {
     macros: HashMap<String, String>,
     /// Lines of output produced by `/echo`.
     pub output: Vec<String>,
+    /// Side-effects queued for the event loop.
+    pub actions: Vec<ScriptAction>,
+    /// Optional callback for `/load` and `/eval /load …`.
+    pub file_loader: Option<FileLoader>,
 }
 
 impl Default for Interpreter {
@@ -60,6 +95,8 @@ impl Interpreter {
             frames: Vec::new(),
             macros: HashMap::new(),
             output: Vec::new(),
+            actions: Vec::new(),
+            file_loader: None,
         }
     }
 
@@ -78,10 +115,14 @@ impl Interpreter {
         self.globals.get(name)
     }
 
+    /// Drain and return all queued [`ScriptAction`]s.
+    pub fn take_actions(&mut self) -> Vec<ScriptAction> {
+        std::mem::take(&mut self.actions)
+    }
+
     // ── Execution ─────────────────────────────────────────────────────────────
 
-    /// Execute a TF script string, returning the last value or a
-    /// control-flow signal.
+    /// Execute a TF script string.
     pub fn exec_script(&mut self, src: &str) -> Result<Value, String> {
         let stmts = parse_script(src).map_err(|e| format!("parse error: {e}"))?;
         match self.exec_block(&stmts)? {
@@ -92,8 +133,6 @@ impl Interpreter {
     }
 
     /// Execute a pre-parsed block of statements.
-    ///
-    /// Returns `Ok(Some(ControlFlow))` when a `/break` or `/return` is hit.
     pub fn exec_block(&mut self, stmts: &[Stmt]) -> Result<Option<ControlFlow>, String> {
         for stmt in stmts {
             if let Some(cf) = self.exec_stmt(stmt)? {
@@ -116,22 +155,20 @@ impl Interpreter {
                 let expanded = expand(text, self)?;
                 if *newline {
                     self.output.push(expanded);
+                } else if let Some(last) = self.output.last_mut() {
+                    last.push_str(&expanded);
                 } else {
-                    // Append to last output line without newline.
-                    if let Some(last) = self.output.last_mut() {
-                        last.push_str(&expanded);
-                    } else {
-                        self.output.push(expanded);
-                    }
+                    self.output.push(expanded);
                 }
                 Ok(None)
             }
 
             Stmt::Send { text } => {
                 let expanded = expand(text, self)?;
-                // In a full implementation this would send `expanded` to the
-                // active world connection.  For now we record it as output.
-                self.output.push(format!("[send] {expanded}"));
+                self.actions.push(ScriptAction::SendToWorld {
+                    text: expanded,
+                    world: None,
+                });
                 Ok(None)
             }
 
@@ -187,7 +224,9 @@ impl Interpreter {
                 loop {
                     let expanded = expand(cond, self)?;
                     let val = eval_str(&expanded, self)?;
-                    if !val.as_bool() { break; }
+                    if !val.as_bool() {
+                        break;
+                    }
                     match self.exec_block(body)? {
                         Some(ControlFlow::Break) => break,
                         Some(cf @ ControlFlow::Return(_)) => return Ok(Some(cf)),
@@ -201,9 +240,13 @@ impl Interpreter {
                 // TF range loop: iterate var from start to end (inclusive).
                 let start_str = expand(start, self)?;
                 let end_str = expand(end, self)?;
-                let start_val: i64 = start_str.trim().parse()
+                let start_val: i64 = start_str
+                    .trim()
+                    .parse()
                     .map_err(|_| format!("invalid /for start value: {start_str}"))?;
-                let end_val: i64 = end_str.trim().parse()
+                let end_val: i64 = end_str
+                    .trim()
+                    .parse()
                     .map_err(|_| format!("invalid /for end value: {end_str}"))?;
                 for i in start_val..=end_val {
                     self.set_local(var, Value::Int(i));
@@ -216,25 +259,139 @@ impl Interpreter {
                 Ok(None)
             }
 
-            Stmt::AddWorld { .. } => {
-                // Forward to config layer in a full implementation.
+            Stmt::AddWorld { args } => {
+                match crate::config::parse_world_from_tokens(args) {
+                    Ok(world) => self.actions.push(ScriptAction::AddWorld(world)),
+                    Err(e) => self.output.push(format!("% {e}")),
+                }
                 Ok(None)
             }
 
             Stmt::Command { name, args } => {
-                // Try user-defined macro.
-                let src = self.macros.get(name).cloned();
+                // Try user-defined macro first.
+                let src = self.macros.get(name.as_str()).cloned();
                 if let Some(body) = src {
                     let expanded_args = expand(args, self)?;
-                    let params: Vec<String> = expanded_args
-                        .split_whitespace()
-                        .map(str::to_owned)
-                        .collect();
+                    let params: Vec<String> =
+                        expanded_args.split_whitespace().map(str::to_owned).collect();
                     return self.invoke_macro(&body, name, params);
                 }
-                // Unknown command — silently ignore (like the C source).
+
+                // Built-in command dispatch.
+                self.exec_builtin(name, args)
+            }
+        }
+    }
+
+    // ── Built-in command dispatch ──────────────────────────────────────────────
+
+    fn exec_builtin(&mut self, name: &str, args: &str) -> Result<Option<ControlFlow>, String> {
+        match name {
+            // ── Lifecycle ──────────────────────────────────────────────────────
+            "quit" | "exit" => {
+                self.actions.push(ScriptAction::Quit);
+                Ok(Some(ControlFlow::Return(Value::default())))
+            }
+
+            // ── Macro definition ───────────────────────────────────────────────
+            "def" => {
+                // /def [-flags…] name = body
+                exec_def(args, &mut self.macros);
                 Ok(None)
             }
+
+            // ── File loading ───────────────────────────────────────────────────
+            "load" => {
+                // /load [-q] [-L <dir>] <file>
+                let (quiet, path_expr) = parse_load_flags(args);
+                let path = expand(path_expr, self)?;
+                let path = path.trim().to_owned();
+                let loader = self.file_loader.clone();
+                if let Some(loader) = loader {
+                    match loader(&path) {
+                        Ok(src) => {
+                            let stmts = parse_script(&src)
+                                .map_err(|e| format!("{path}: parse error: {e}"))?;
+                            self.exec_block(&stmts)?;
+                        }
+                        Err(e) if !quiet => {
+                            self.output.push(format!("% {e}"));
+                        }
+                        Err(_) => {} // quiet mode — suppress "not found"
+                    }
+                }
+                Ok(None)
+            }
+
+            // ── Expression / command evaluation ───────────────────────────────
+            "eval" => {
+                // /eval <command-or-expression>
+                let expanded = expand(args, self)?;
+                let trimmed = expanded.trim();
+                if trimmed.is_empty() {
+                    return Ok(None);
+                }
+                let stmts =
+                    parse_script(trimmed).map_err(|e| format!("/eval: parse error: {e}"))?;
+                self.exec_block(&stmts)
+            }
+
+            // ── World / connection management ──────────────────────────────────
+            "addworld" => {
+                let tokens: Vec<String> =
+                    tokenise_addworld(&expand(args, self)?);
+                match crate::config::parse_world_from_tokens(&tokens) {
+                    Ok(world) => self.actions.push(ScriptAction::AddWorld(world)),
+                    Err(e) => self.output.push(format!("% {e}")),
+                }
+                Ok(None)
+            }
+
+            "connect" | "fg" => {
+                let expanded = expand(args, self)?;
+                self.actions.push(ScriptAction::Connect { name: expanded.trim().to_owned() });
+                Ok(None)
+            }
+
+            "disconnect" | "dc" => {
+                let expanded = expand(args, self)?;
+                self.actions.push(ScriptAction::Disconnect {
+                    name: expanded.trim().to_owned(),
+                });
+                Ok(None)
+            }
+
+            "world" => {
+                let expanded = expand(args, self)?;
+                self.actions.push(ScriptAction::SwitchWorld {
+                    name: expanded.trim().to_owned(),
+                });
+                Ok(None)
+            }
+
+            // ── Echo / output ──────────────────────────────────────────────────
+            "echo" => {
+                let (no_nl, rest) =
+                    if let Some(s) = args.strip_prefix("-n ").or_else(|| args.strip_prefix("-n\t")) {
+                        (true, s)
+                    } else {
+                        (false, args)
+                    };
+                let expanded = expand(rest, self)?;
+                if no_nl {
+                    if let Some(last) = self.output.last_mut() {
+                        last.push_str(&expanded);
+                    } else {
+                        self.output.push(expanded);
+                    }
+                } else {
+                    self.output.push(expanded);
+                }
+                Ok(None)
+            }
+
+            // ── Unknown — silently ignore (like the C source) ──────────────────
+            _ => Ok(None),
         }
     }
 
@@ -261,7 +418,6 @@ impl Interpreter {
 
 impl EvalContext for Interpreter {
     fn get_var(&self, name: &str) -> Option<Value> {
-        // Local scope first (innermost frame)
         for frame in self.frames.iter().rev() {
             if let Some(v) = frame.locals.get(name) {
                 return Some(v.clone());
@@ -291,16 +447,13 @@ impl EvalContext for Interpreter {
     }
 
     fn call_fn(&mut self, name: &str, args: Vec<Value>) -> Result<Value, String> {
-        // 1. Try built-ins
         if let Some(result) = call_builtin(name, args.clone()) {
             return result;
         }
-        // 2. Try user-defined macros
         let src = self.macros.get(name).cloned();
         if let Some(body) = src {
             let params: Vec<String> = args.iter().map(|v| v.to_string()).collect();
             self.invoke_macro(&body, name, params)?;
-            // Return value is delivered via ControlFlow::Return; extract from output.
             return Ok(Value::default());
         }
         Err(format!("unknown function: {name}"))
@@ -323,6 +476,92 @@ fn try_parse_number(s: &str) -> Value {
     } else {
         Value::Str(s.to_owned())
     }
+}
+
+/// Parse `/def [-flags…] name = body` and insert into the macro map.
+///
+/// Flags are skipped (they control triggers/hooks/priority, which are Phase 13).
+/// The only thing we extract is the `name = body` pair.
+fn exec_def(raw: &str, macros: &mut HashMap<String, String>) {
+    let mut rest = raw.trim();
+
+    // Skip flag tokens (start with `-`).
+    while rest.starts_with('-') {
+        let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+        let flag = &rest[1..end]; // flag chars after the `-`
+        rest = rest[end..].trim_start();
+
+        // Flags that consume one additional token: -p -g -b -t -h -s -w -n -m -c -T -E
+        // If the flag part is a single letter that requires an arg AND no arg was
+        // embedded directly in the flag token, consume the next word.
+        if flag.len() == 1
+            && matches!(
+                flag.chars().next(),
+                Some('p' | 'g' | 'b' | 't' | 'h' | 's' | 'w' | 'n' | 'm' | 'c' | 'T' | 'E')
+            )
+        {
+            // Only consume next token if the flag had no embedded arg.
+            let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+            rest = rest[end..].trim_start();
+        }
+    }
+
+    // rest = "name = body"  or  "name"  (listing — ignore)
+    if let Some(eq) = rest.find('=') {
+        let name = rest[..eq].trim();
+        let body = rest[eq + 1..].trim();
+        if !name.is_empty() {
+            macros.insert(name.to_owned(), body.to_owned());
+        }
+    }
+}
+
+/// Extract the `-q` (quiet) flag and remaining path from `/load` args.
+fn parse_load_flags(args: &str) -> (bool, &str) {
+    let mut rest = args.trim();
+    let mut quiet = false;
+    loop {
+        if let Some(r) = rest.strip_prefix("-q") {
+            quiet = true;
+            rest = r.trim_start();
+        } else if let Some(r) = rest.strip_prefix("-L ").or_else(|| rest.strip_prefix("-L\t")) {
+            // -L <dir> — skip the next token (we ignore the dir override here;
+            // the caller's variable expansion handles TFLIBDIR).
+            let end = r.find(char::is_whitespace).unwrap_or(r.len());
+            rest = r[end..].trim_start();
+        } else {
+            break;
+        }
+    }
+    (quiet, rest)
+}
+
+/// Tokenise an `/addworld` argument string (respects double-quoted tokens).
+fn tokenise_addworld(s: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut cur = String::new();
+    let mut in_q = false;
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => in_q = !in_q,
+            '\\' if in_q => {
+                if let Some(next) = chars.next() {
+                    cur.push(next);
+                }
+            }
+            c if c.is_whitespace() && !in_q => {
+                if !cur.is_empty() {
+                    tokens.push(std::mem::take(&mut cur));
+                }
+            }
+            c => cur.push(c),
+        }
+    }
+    if !cur.is_empty() {
+        tokens.push(cur);
+    }
+    tokens
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -375,7 +614,6 @@ mod tests {
 
     #[test]
     fn while_loop() {
-        // Use $[i+1] so the increment actually evaluates the expression.
         let src = "/set i=0\n/while (i < 3)\n/echo loop\n/set i=$[i+1]\n/done";
         let out = output(src);
         assert_eq!(out, vec!["loop", "loop", "loop"]);
@@ -385,7 +623,6 @@ mod tests {
     fn while_break() {
         let src = "/set i=0\n/while (1)\n/set i=%{i}\n/break\n/done";
         let out = output(src);
-        // The break exits immediately — no echo, just no infinite loop.
         assert!(out.is_empty());
     }
 
@@ -417,6 +654,15 @@ mod tests {
     }
 
     #[test]
+    fn local_scope_isolation() {
+        let mut interp = Interpreter::new();
+        interp.set_global_var("x", Value::Int(99));
+        interp.define_macro("setx", "/let x=42");
+        interp.exec_script("/setx").unwrap();
+        assert_eq!(interp.get_global_var("x"), Some(&Value::Int(99)));
+    }
+
+    #[test]
     fn for_range_loop() {
         let src = "/for i 1 3 /echo %i";
         assert_eq!(output(src), vec!["1", "2", "3"]);
@@ -430,12 +676,52 @@ mod tests {
     }
 
     #[test]
-    fn local_scope_isolation() {
+    fn send_queues_action() {
         let mut interp = Interpreter::new();
-        interp.set_global_var("x", Value::Int(99));
-        interp.define_macro("setx", "/let x=42");
-        interp.exec_script("/setx").unwrap();
-        // Global x should be unchanged after macro's /let
-        assert_eq!(interp.get_global_var("x"), Some(&Value::Int(99)));
+        interp.exec_script("/send go east").unwrap();
+        let actions = interp.take_actions();
+        assert!(matches!(
+            &actions[0],
+            ScriptAction::SendToWorld { text, world: None } if text == "go east"
+        ));
+    }
+
+    #[test]
+    fn quit_queues_action() {
+        let mut interp = Interpreter::new();
+        interp.exec_script("/quit").unwrap();
+        let actions = interp.take_actions();
+        assert!(matches!(actions[0], ScriptAction::Quit));
+    }
+
+    #[test]
+    fn def_and_call() {
+        let mut interp = Interpreter::new();
+        interp.exec_script("/def -i greet = /echo Hi, {1}!").unwrap();
+        interp.exec_script("/greet World").unwrap();
+        assert_eq!(interp.output, vec!["Hi, World!"]);
+    }
+
+    #[test]
+    fn load_via_file_loader() {
+        let body = Arc::new(|_path: &str| Ok("/echo loaded".to_owned()));
+        let mut interp = Interpreter::new();
+        interp.file_loader = Some(body);
+        interp.exec_script("/load somefile.tf").unwrap();
+        assert_eq!(interp.output, vec!["loaded"]);
+    }
+
+    #[test]
+    fn eval_command() {
+        let out = output("/eval /echo from eval");
+        assert_eq!(out, vec!["from eval"]);
+    }
+
+    #[test]
+    fn connect_queues_action() {
+        let mut interp = Interpreter::new();
+        interp.exec_script("/connect mymud").unwrap();
+        let actions = interp.take_actions();
+        assert!(matches!(&actions[0], ScriptAction::Connect { name } if name == "mymud"));
     }
 }

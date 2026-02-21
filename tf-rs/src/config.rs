@@ -215,6 +215,12 @@ fn parse_opts(tokens: &[String]) -> AddWorldOpts {
 /// - `default <char>`
 /// - `default <char> <pass>`
 /// - `default <char> <pass> <mfile>`
+///
+/// Public wrapper used by the interpreter.
+pub fn parse_world_from_tokens(tokens: &[String]) -> Result<World, String> {
+    parse_addworld(tokens)
+}
+
 fn parse_addworld(tokens: &[String]) -> Result<World, String> {
     let opts = parse_opts(tokens);
     let pos = &opts.positional;

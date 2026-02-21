@@ -36,6 +36,7 @@ use tokio::time::sleep_until;
 use crate::keybind::{EditAction, InputProcessor, Keymap};
 use crate::net::{Connection, NetEvent};
 use crate::process::ProcessScheduler;
+use crate::script::interp::{FileLoader, Interpreter, ScriptAction};
 use crate::terminal::Terminal;
 use crate::world::WorldStore;
 
@@ -173,6 +174,28 @@ impl ConnectionHandle {
     }
 }
 
+// ── File loader ───────────────────────────────────────────────────────────
+
+/// Expand a leading `~` to `$HOME`.
+fn expand_tilde(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix('~') {
+        let home = std::env::var("HOME").unwrap_or_default();
+        format!("{home}{rest}")
+    } else {
+        path.to_owned()
+    }
+}
+
+/// Build the [`FileLoader`] callback used by the interpreter for `/load`.
+fn make_file_loader() -> FileLoader {
+    use std::sync::Arc;
+    Arc::new(|path: &str| {
+        let resolved = expand_tilde(path);
+        std::fs::read_to_string(&resolved)
+            .map_err(|e| format!("{resolved}: {e}"))
+    })
+}
+
 // ── EventLoop ─────────────────────────────────────────────────────────────
 
 /// The top-level runtime: ties together all subsystems and drives them from
@@ -192,9 +215,14 @@ pub struct EventLoop {
     input: InputProcessor,
     key_decoder: KeyDecoder,
     terminal: Terminal,
-    #[allow(dead_code)]
     worlds: WorldStore,
     scheduler: ProcessScheduler,
+
+    /// Script interpreter — executes user commands and loaded `.tf` files.
+    pub interp: Interpreter,
+
+    /// Set to `true` to exit the main loop after the current iteration.
+    quit: bool,
 
     /// Path to check for new mail (mirrors `%mailpath`).
     mail_path: Option<PathBuf>,
@@ -210,6 +238,8 @@ impl EventLoop {
         let (net_tx, net_rx) = mpsc::channel(256);
         let terminal = Terminal::new(std::io::stdout())
             .expect("failed to create terminal");
+        let mut interp = Interpreter::new();
+        interp.file_loader = Some(make_file_loader());
         Self {
             net_rx,
             net_tx,
@@ -220,10 +250,37 @@ impl EventLoop {
             terminal,
             worlds: WorldStore::new(),
             scheduler: ProcessScheduler::new(),
+            interp,
+            quit: false,
             mail_path: None,
             mail_next: Instant::now() + MAIL_CHECK_INTERVAL,
             need_refresh: false,
         }
+    }
+
+    /// Execute a `.tf` script file through the interpreter.
+    ///
+    /// Output lines are printed immediately; [`ScriptAction`]s that make sense
+    /// during startup (e.g. `AddWorld`) are processed; others are dropped.
+    /// Returns `Err` if the file cannot be read.
+    pub fn load_script_file(&mut self, path: &std::path::Path) -> Result<(), String> {
+        let src = std::fs::read_to_string(path)
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        self.interp
+            .exec_script(&src)
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        // Drain output — print to stdout (terminal not in raw mode yet).
+        for line in self.interp.output.drain(..) {
+            println!("{line}");
+        }
+        // Process startup-safe actions.
+        for action in self.interp.take_actions() {
+            // Quit/Connect/Disconnect are deferred until after startup.
+            if let ScriptAction::AddWorld(w) = action {
+                self.worlds.upsert(w);
+            }
+        }
+        Ok(())
     }
 
     /// Open a plain-TCP connection to `host:port` and register it as `world_name`.
@@ -278,9 +335,7 @@ impl EventLoop {
         let mut stdin = tokio::io::stdin();
         let mut stdin_buf = [0u8; 256];
 
-        let mut quit = false;
-
-        while !quit {
+        while !self.quit {
             // ── Compute the next timer deadline ──────────────────────────
             let now = Instant::now();
             let deadline = [
@@ -301,7 +356,7 @@ impl EventLoop {
                 // Keyboard input.
                 result = stdin.read(&mut stdin_buf) => {
                     match result {
-                        Ok(0) | Err(_) => quit = true,
+                        Ok(0) | Err(_) => self.quit = true,
                         Ok(n) => {
                             for &b in &stdin_buf[..n] {
                                 if let Some(action) = self.key_decoder.push(b) {
@@ -328,9 +383,9 @@ impl EventLoop {
                 }
 
                 // Graceful shutdown.
-                _ = sigterm.recv() => quit = true,
-                _ = sigint.recv()  => quit = true,
-                _ = sighup.recv()  => quit = true,
+                _ = sigterm.recv() => self.quit = true,
+                _ = sigint.recv()  => self.quit = true,
+                _ = sighup.recv()  => self.quit = true,
 
                 // Timer tick.
                 _ = &mut timer => {
@@ -360,19 +415,103 @@ impl EventLoop {
     }
 
     async fn run_command(&mut self, cmd: &str) {
-        let rest = cmd.trim_start_matches('/');
-        if rest.starts_with("quit") || rest.starts_with("exit") {
-            // In a full implementation this sets a quit flag visible to run().
-            // For Phase 9 we just drop all handles — the run() loop will exit
-            // once net_rx drains and timers expire, which is acceptable for
-            // a rewrite skeleton.  A production implementation uses a channel.
-        } else if let Some(world) = rest.strip_prefix("world ") {
-            let world = world.trim().to_owned();
-            if self.handles.contains_key(&world) {
-                self.active_world = Some(world);
+        if let Err(e) = self.interp.exec_script(cmd) {
+            self.terminal.print_line(&format!("% Error: {e}"));
+            self.need_refresh = true;
+        }
+        // Print interpreter output to terminal.
+        for line in self.interp.output.drain(..) {
+            self.terminal.print_line(&line);
+            self.need_refresh = true;
+        }
+        // Process queued side-effects.
+        for action in self.interp.take_actions() {
+            self.handle_script_action(action).await;
+        }
+    }
+
+    async fn handle_script_action(&mut self, action: ScriptAction) {
+        match action {
+            ScriptAction::Quit => self.quit = true,
+
+            ScriptAction::SendToWorld { text, world } => {
+                let name = world.or_else(|| self.active_world.clone());
+                if let Some(n) = name {
+                    if let Some(h) = self.handles.get(&n) {
+                        h.send_line(&text).await;
+                    }
+                }
+            }
+
+            ScriptAction::Connect { name } => {
+                self.connect_world_by_name(&name).await;
+            }
+
+            ScriptAction::Disconnect { name } => {
+                let target = if name.is_empty() {
+                    self.active_world.clone()
+                } else {
+                    Some(name)
+                };
+                if let Some(n) = target {
+                    self.handles.remove(&n);
+                    if self.active_world.as_deref() == Some(&n) {
+                        self.active_world = self.handles.keys().next().cloned();
+                    }
+                    self.terminal
+                        .print_line(&format!("** Disconnected from {n} **"));
+                    self.need_refresh = true;
+                }
+            }
+
+            ScriptAction::AddWorld(w) => {
+                self.worlds.upsert(w);
+            }
+
+            ScriptAction::SwitchWorld { name } => {
+                if self.handles.contains_key(&name) {
+                    self.active_world = Some(name);
+                } else {
+                    self.terminal
+                        .print_line(&format!("% No open connection to '{name}'"));
+                    self.need_refresh = true;
+                }
             }
         }
-        // Full command dispatch via script VM is wired up in Phase 10.
+    }
+
+    /// Connect to a world by name (looks it up in `WorldStore`).
+    /// An empty name means the default world.
+    pub async fn connect_world_by_name(&mut self, name: &str) {
+        let world = if name.is_empty() {
+            self.worlds.default_world().cloned()
+        } else {
+            self.worlds.find(name).cloned()
+        };
+        let Some(w) = world else {
+            self.terminal
+                .print_line(&format!("% Unknown world '{name}'"));
+            self.need_refresh = true;
+            return;
+        };
+        if !w.is_connectable() {
+            self.terminal
+                .print_line(&format!("% World '{}' has no host/port", w.name));
+            self.need_refresh = true;
+            return;
+        }
+        let host = w.host.as_deref().unwrap();
+        let port: u16 = w.port.as_deref().unwrap_or("23").parse().unwrap_or(23);
+        let result = if w.flags.ssl {
+            self.connect_tls(&w.name, host, port).await
+        } else {
+            self.connect(&w.name, host, port).await
+        };
+        if let Err(e) = result {
+            self.terminal
+                .print_line(&format!("% Connect to '{}' failed: {e}", w.name));
+            self.need_refresh = true;
+        }
     }
 
     // ── Net event dispatch ────────────────────────────────────────────────
