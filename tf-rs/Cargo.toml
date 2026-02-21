@@ -12,6 +12,9 @@ path = "src/lib.rs"
 name = "tf-rust"
 path = "src/main.rs"
 
+[features]
+lua = ["dep:mlua"]
+
 [dependencies]
 regex = "1"
 aho-corasick = "0.7"
@@ -20,7 +23,9 @@ tokio = { version = "1", features = ["net", "io-util", "io-std", "rt-multi-threa
 tokio-rustls = "0.26"
 webpki-roots = "0.26"
 flate2 = "1"
+mlua = { version = "0.10", features = ["lua54", "vendored"], optional = true }
 
 [dev-dependencies]
 criterion = "0.5"
 proptest = "1.0"
+tempfile = "3"
