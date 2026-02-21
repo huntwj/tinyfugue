@@ -1,9 +1,49 @@
+use std::path::Path;
+
 use proptest::prelude::*;
 use tf::pattern::{MatchMode, Pattern};
 use tf::script::builtins::call_builtin;
 use tf::script::stmt::parse_script;
 use tf::script::value::Value;
 use tf::tfstr::TfStr;
+
+/// Parse all .tf files in lib/tf/ — acceptance criterion for Phase 11.
+#[test]
+fn parse_all_lib_tf_files() {
+    let tf_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .join("lib/tf");
+
+    let mut entries: Vec<_> = std::fs::read_dir(&tf_dir)
+        .unwrap_or_else(|e| panic!("cannot open {}: {e}", tf_dir.display()))
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().map(|x| x == "tf").unwrap_or(false))
+        .collect();
+    entries.sort_by_key(|e| e.path());
+
+    assert!(!entries.is_empty(), "no .tf files found in {}", tf_dir.display());
+
+    let mut failures = Vec::new();
+    for entry in &entries {
+        let path = entry.path();
+        let src = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+        if let Err(e) = parse_script(&src) {
+            failures.push(format!("{}: {e}", path.file_name().unwrap().to_string_lossy()));
+        }
+    }
+
+    if !failures.is_empty() {
+        panic!(
+            "{}/{} files failed to parse:\n  {}",
+            failures.len(),
+            entries.len(),
+            failures.join("\n  ")
+        );
+    }
+    println!("All {} lib/tf/*.tf files parsed successfully", entries.len());
+}
 
 proptest! {
     /// Ensure parser never panics on arbitrary valid UTF-8 input; it should

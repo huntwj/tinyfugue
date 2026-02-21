@@ -197,26 +197,20 @@ impl Interpreter {
                 Ok(None)
             }
 
-            Stmt::For { init, cond, step, body } => {
-                // Evaluate init expression
-                if !init.is_empty() {
-                    let expanded = expand(init, self)?;
-                    eval_str(&expanded, self)?;
-                }
-                loop {
-                    if !cond.is_empty() {
-                        let expanded = expand(cond, self)?;
-                        let val = eval_str(&expanded, self)?;
-                        if !val.as_bool() { break; }
-                    }
+            Stmt::For { var, start, end, body } => {
+                // TF range loop: iterate var from start to end (inclusive).
+                let start_str = expand(start, self)?;
+                let end_str = expand(end, self)?;
+                let start_val: i64 = start_str.trim().parse()
+                    .map_err(|_| format!("invalid /for start value: {start_str}"))?;
+                let end_val: i64 = end_str.trim().parse()
+                    .map_err(|_| format!("invalid /for end value: {end_str}"))?;
+                for i in start_val..=end_val {
+                    self.set_local(var, Value::Int(i));
                     match self.exec_block(body)? {
                         Some(ControlFlow::Break) => break,
                         Some(cf @ ControlFlow::Return(_)) => return Ok(Some(cf)),
                         None => {}
-                    }
-                    if !step.is_empty() {
-                        let expanded = expand(step, self)?;
-                        eval_str(&expanded, self)?;
                     }
                 }
                 Ok(None)
@@ -420,6 +414,19 @@ mod tests {
     fn builtin_strlen_via_expr() {
         let src = "/echo $[strlen(\"hello\")]";
         assert_eq!(output(src), vec!["5"]);
+    }
+
+    #[test]
+    fn for_range_loop() {
+        let src = "/for i 1 3 /echo %i";
+        assert_eq!(output(src), vec!["1", "2", "3"]);
+    }
+
+    #[test]
+    fn for_range_sets_var() {
+        let src = "/for n 10 12 /set last=%n\n/echo %last";
+        let out = output(src);
+        assert_eq!(out, vec!["12"]);
     }
 
     #[test]

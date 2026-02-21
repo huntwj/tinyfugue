@@ -16,11 +16,11 @@ pub enum Stmt {
     },
     /// `/while (cond) body /done`
     While { cond: String, body: Vec<Stmt> },
-    /// `/for (init; cond; step) body /done`
+    /// `/for var start end body`  — iterates var from start to end (inclusive)
     For {
-        init: String,
-        cond: String,
-        step: String,
+        var: String,
+        start: String,
+        end: String,
         body: Vec<Stmt>,
     },
     /// `/let name=value`
@@ -157,9 +157,7 @@ impl StmtParser {
         loop {
             let line = match self.peek() {
                 None => {
-                    if let Some(stops) = stop_at {
-                        return Err(format!("unexpected EOF, expected one of: {stops:?}"));
-                    }
+                    // EOF implicitly closes any open block (needed for multi-file /load sourcing).
                     break;
                 }
                 Some(l) => l.to_owned(),
@@ -237,16 +235,16 @@ impl StmtParser {
 
         let then_block = self.parse_block_until(Some(&["else", "endif"]))?;
 
-        // Consume /else or /endif
-        let terminator = self.advance().ok_or("expected /else or /endif")?;
-        let tc = cmd_name(&terminator);
+        // Consume /else or /endif; treat EOF as implicit /endif.
+        let terminator = self.advance();
+        let tc = terminator.as_deref().map(cmd_name).unwrap_or("endif");
 
         let else_block = if tc == "else" {
             let blk = self.parse_block_until(Some(&["endif"]))?;
-            self.advance(); // consume /endif
+            self.advance(); // consume /endif (or ignore None at EOF)
             blk
         } else {
-            Vec::new() // was /endif
+            Vec::new() // was /endif or EOF
         };
 
         Ok(Stmt::If {
@@ -264,21 +262,19 @@ impl StmtParser {
     }
 
     fn parse_for(&mut self, rest: &str) -> Result<Stmt, String> {
-        // /for (init; cond; step)
-        let inner = strip_parens(rest.trim());
-        let parts: Vec<&str> = inner.splitn(3, ';').collect();
-        if parts.len() != 3 {
-            return Err(format!("malformed /for header: {rest}"));
-        }
-        let init = parts[0].trim().to_owned();
-        let cond = parts[1].trim().to_owned();
-        let step = parts[2].trim().to_owned();
-        let body = self.parse_block_until(Some(&["done"]))?;
-        self.advance();
+        // TF /for syntax: /for var start end body_statement
+        // var, start, end are whitespace-delimited tokens; body is the remainder.
+        let (var, rest) = split_word(rest)
+            .ok_or_else(|| format!("missing var in /for: {rest}"))?;
+        let (start, rest) = split_word(rest)
+            .ok_or_else(|| format!("missing start in /for {var}"))?;
+        let (end, body_str) = split_word(rest)
+            .ok_or_else(|| format!("missing end in /for {var}"))?;
+        let body = parse_script(body_str)?;
         Ok(Stmt::For {
-            init,
-            cond,
-            step,
+            var: var.to_owned(),
+            start: start.to_owned(),
+            end: end.to_owned(),
             body,
         })
     }
@@ -308,6 +304,17 @@ fn strip_parens(s: &str) -> &str {
     } else {
         s
     }
+}
+
+/// Split off the first whitespace-delimited word from `s`.
+/// Returns `(word, rest)` or `None` if `s` is empty/all-whitespace.
+fn split_word(s: &str) -> Option<(&str, &str)> {
+    let s = s.trim_start();
+    if s.is_empty() {
+        return None;
+    }
+    let end = s.find(char::is_whitespace).unwrap_or(s.len());
+    Some((&s[..end], &s[end..]))
 }
 
 /// Parse `/let name=value` or `/set name=value` or `/set name value`.
@@ -471,20 +478,48 @@ mod tests {
     }
 
     #[test]
-    fn missing_endif_is_error() {
-        let res = parse_script("/if (x > 0)\n/echo hi");
-        assert!(
-            res.is_err(),
-            "expected parse_script to return Err for missing /endif"
-        );
+    fn eof_closes_if_block() {
+        // TF treats EOF as an implicit /endif — needed for multi-file /load sourcing.
+        let stmts = parse_script("/if (x > 0)\n/echo hi").expect("parse failed");
+        assert_eq!(stmts.len(), 1);
+        assert!(matches!(&stmts[0], Stmt::If { .. }));
     }
 
     #[test]
-    fn missing_done_is_error() {
-        let res = parse_script("/while (i < 3)\n/echo hi");
-        assert!(
-            res.is_err(),
-            "expected parse_script to return Err for missing /done"
-        );
+    fn eof_closes_while_block() {
+        // TF treats EOF as an implicit /done.
+        let stmts = parse_script("/while (i < 3)\n/echo hi").expect("parse failed");
+        assert_eq!(stmts.len(), 1);
+        assert!(matches!(&stmts[0], Stmt::While { .. }));
+    }
+
+    #[test]
+    fn for_range_inline_body() {
+        // /for var start end body  (TF range syntax, body on same line)
+        let stmts = parse("/for i 0 5 /echo %i");
+        assert_eq!(stmts.len(), 1);
+        if let Stmt::For { var, start, end, body } = &stmts[0] {
+            assert_eq!(var, "i");
+            assert_eq!(start, "0");
+            assert_eq!(end, "5");
+            assert_eq!(body.len(), 1);
+            assert!(matches!(&body[0], Stmt::Echo { .. }));
+        } else {
+            panic!("expected For");
+        }
+    }
+
+    #[test]
+    fn for_range_nested() {
+        // Nested /for via continuation joining: /for x 0 2 /for y 0 2 /echo ...
+        let stmts = parse("/for x 0 2 /for y 0 2 /echo xy");
+        assert_eq!(stmts.len(), 1);
+        if let Stmt::For { var, body, .. } = &stmts[0] {
+            assert_eq!(var, "x");
+            assert_eq!(body.len(), 1);
+            assert!(matches!(&body[0], Stmt::For { .. }));
+        } else {
+            panic!("expected outer For");
+        }
     }
 }

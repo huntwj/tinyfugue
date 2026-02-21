@@ -159,7 +159,29 @@ This is a gradual, *strangler-fig* rewrite: the C binary continues to work throu
 
 ---
 
-## Phase 11: Startup, Configuration & Command Dispatch
+## Phase 11: Script Parser Fixes
+
+**C source**: `parse.h`, `command.c`
+
+**Goal**: The TF script parser correctly handles every file in `lib/tf/`.
+
+Running all 47 `.tf` files through the parser revealed two bugs:
+
+1. **`/for` range syntax** — TF's `/for` is range-based (`/for var start end
+   body`), not C-style.  The Rust parser implements `for(init; cond; step)`
+   and fails on the three files that use the real syntax (`cylon.tf`,
+   `spedwalk.tf`, `testcolor.tf`).
+
+2. **EOF closes open blocks** — TF treats end-of-file as implicitly closing
+   any open `/if`…`/endif` or `/while`…`/done` block (needed for multi-file
+   sourcing).  The Rust parser requires explicit closing keywords and fails on
+   `color.tf` and `complete.tf`.
+
+**Acceptance criterion**: all 47 `.tf` files in `lib/tf/` parse without error.
+
+---
+
+## Phase 12: Startup, Configuration & Command Dispatch
 
 **C source**: `main.c`, `command.c`, `cmdlist.h`, `variable.c`
 
@@ -183,7 +205,7 @@ command through the script VM.
 
 ---
 
-## Phase 12: Display, Triggers & Hooks
+## Phase 13: Display, Triggers & Hooks
 
 **C source**: `output.c`, `tty.c`, `macro.c`, `hooklist.h`
 
@@ -202,7 +224,7 @@ Screen model.
 
 ---
 
-## Phase 13: Processes & Embedded Language Commands
+## Phase 14: Processes & Embedded Language Commands
 
 **C source**: `process.c`, `lua.c`, `tfpython.c`
 
@@ -220,7 +242,7 @@ reachable from user commands.
 
 ---
 
-## Phase 14: Cutover
+## Phase 15: Cutover
 
 - Feature parity verified against the C test suite and manual testing
 - CI switched to build only the Rust binary
