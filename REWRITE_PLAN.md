@@ -159,7 +159,64 @@ This is a gradual, *strangler-fig* rewrite: the C binary continues to work throu
 
 ---
 
-## Phase 11: Cutover
+## Phase 11: Startup, Configuration & Command Dispatch
+
+**C source**: `main.c`, `command.c`, `cmdlist.h`, `variable.c`
+
+**Goal**: The binary loads user configuration on startup and routes every typed
+command through the script VM.
+
+- Parse CLI arguments: world name, `-f rc-file`, `-p port`, `-n char-name`, etc.
+- Load and execute `.tfrc` (and any `-f` file) via `Interpreter` before the
+  event loop starts
+- Wire `Interpreter` into `EventLoop::run_command` — all `/commands` dispatch
+  through the VM instead of the current stub
+- `/send` inside scripts sends to the active connection (not a local buffer)
+- `/addworld` creates a `World` in `WorldStore` and makes it connectable
+- `/connect` and `/disconnect` open and close connections from user commands
+- `/quit` / `/exit` correctly terminate the event loop
+- Auto-connect to a world supplied as a CLI argument
+
+---
+
+## Phase 12: Display, Triggers & Hooks
+
+**C source**: `output.c`, `tty.c`, `macro.c`, `hooklist.h`
+
+**Goal**: Server output flows through the trigger/hook engine and the full
+Screen model.
+
+- Replace the bare `terminal.print_line()` path with proper `Screen::push_line()`
+  so scrollback, wrapping, and More-mode work end-to-end
+- Status line rendered from its format string (world name, clock, custom fields)
+- Wire `MacroStore` into `handle_net_message` — incoming lines run through
+  pattern matching before display; matched macros execute
+- Hook dispatch: CONNECT, DISCONNECT, ACTIVITY, GMCP, MAIL, and other events
+  fire the appropriate hook set
+- Gag / highlight / per-character attribute application on matched lines
+- Scrollback navigation bound to PgUp / PgDn
+
+---
+
+## Phase 13: Processes & Embedded Language Commands
+
+**C source**: `process.c`, `lua.c`, `tfpython.c`
+
+**Goal**: Process scheduling and the Phase 10 scripting engines are fully
+reachable from user commands.
+
+- `/repeat interval count body` and `/quote 'file` / `/quote !cmd` wired
+  through `ProcessScheduler` with full execution (file I/O and
+  `tokio::process::Command` for shell quotes)
+- `/loadlua path`, `/calllua func [args]`, `/purgelua` wired to `LuaEngine`
+- `/python code`, `/callpython func arg`, `/loadpython module`,
+  `/killpython` wired to `PythonEngine`
+- Remaining built-in commands: `/log`, `/nolog`, `/listworlds`, `/list`,
+  `/help`, `/def`, `/undef`, `/trigger`, `/on`, `/hook`, `/bind`, `/unbind`
+
+---
+
+## Phase 14: Cutover
 
 - Feature parity verified against the C test suite and manual testing
 - CI switched to build only the Rust binary
