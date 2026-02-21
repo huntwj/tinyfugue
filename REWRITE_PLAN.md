@@ -166,9 +166,13 @@ This is a gradual, *strangler-fig* rewrite: the C binary continues to work throu
 **Goal**: The binary loads user configuration on startup and routes every typed
 command through the script VM.
 
-- Parse CLI arguments: world name, `-f rc-file`, `-p port`, `-n char-name`, etc.
-- Load and execute `.tfrc` (and any `-f` file) via `Interpreter` before the
-  event loop starts
+- Parse CLI arguments: world name, `-f rc-file`, `-p port`, `-n char-name`,
+  `-L libdir`, etc.
+- Locate `TFLIBDIR` and load `$TFLIBDIR/stdlib.tf` via `Interpreter` — this
+  is **required**; the binary must exit with a clear error if it cannot be read
+  (mirrors the C `die("Can't read required library.", 0)`)
+- Load user config: `-f <file>` if given, otherwise search `~/.tfrc`,
+  `~/tfrc`, `./.tfrc`, `./tfrc` in order (first found, optional)
 - Wire `Interpreter` into `EventLoop::run_command` — all `/commands` dispatch
   through the VM instead of the current stub
 - `/send` inside scripts sends to the active connection (not a local buffer)
