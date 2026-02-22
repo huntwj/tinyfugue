@@ -33,11 +33,14 @@ use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::mpsc;
 use tokio::time::sleep_until;
 
-use crate::keybind::{EditAction, InputProcessor, Keymap};
+use crate::hook::Hook;
+use crate::keybind::{DoKeyOp, EditAction, InputProcessor, KeyBinding, Keymap};
+use crate::macros::MacroStore;
 use crate::net::{Connection, NetEvent};
 use crate::process::ProcessScheduler;
+use crate::screen::{LogicalLine, Screen};
 use crate::script::interp::{FileLoader, Interpreter, ScriptAction};
-use crate::terminal::Terminal;
+use crate::terminal::{StatusLine, Terminal};
 use crate::world::WorldStore;
 
 // ── Timing constants ─────────────────────────────────────────────────────
@@ -221,6 +224,15 @@ pub struct EventLoop {
     /// Script interpreter — executes user commands and loaded `.tf` files.
     pub interp: Interpreter,
 
+    /// Macro / trigger / hook store.
+    macro_store: MacroStore,
+
+    /// Output scrollback buffer.
+    screen: Screen,
+
+    /// Status bar content.
+    status: StatusLine,
+
     /// Set to `true` to exit the main loop after the current iteration.
     quit: bool,
 
@@ -238,6 +250,8 @@ impl EventLoop {
         let (net_tx, net_rx) = mpsc::channel(256);
         let terminal = Terminal::new(std::io::stdout())
             .expect("failed to create terminal");
+        let screen = Screen::new(terminal.width as usize,
+                                 terminal.output_bottom() as usize);
         let mut interp = Interpreter::new();
         interp.file_loader = Some(make_file_loader());
         Self {
@@ -251,6 +265,9 @@ impl EventLoop {
             worlds: WorldStore::new(),
             scheduler: ProcessScheduler::new(),
             interp,
+            macro_store: MacroStore::new(),
+            screen,
+            status: StatusLine::default(),
             quit: false,
             mail_path: None,
             mail_next: Instant::now() + MAIL_CHECK_INTERVAL,
@@ -276,8 +293,10 @@ impl EventLoop {
         // Process startup-safe actions.
         for action in self.interp.take_actions() {
             // Quit/Connect/Disconnect are deferred until after startup.
-            if let ScriptAction::AddWorld(w) = action {
-                self.worlds.upsert(w);
+            match action {
+                ScriptAction::AddWorld(w) => { self.worlds.upsert(w); }
+                ScriptAction::DefMacro(mac) => { self.macro_store.add(mac); }
+                _ => {}
             }
         }
         Ok(())
@@ -360,8 +379,23 @@ impl EventLoop {
                         Ok(n) => {
                             for &b in &stdin_buf[..n] {
                                 if let Some(action) = self.key_decoder.push(b) {
-                                    if let Some(line) = self.input.apply(action) {
-                                        self.dispatch_line(line).await;
+                                    // Intercept scrollback ops before the editor.
+                                    match &action {
+                                        EditAction::Bound(KeyBinding::DoKey(DoKeyOp::ScrollUp)) => {
+                                            let page = self.terminal.output_bottom() as usize;
+                                            self.screen.scroll_up(page);
+                                            self.need_refresh = true;
+                                        }
+                                        EditAction::Bound(KeyBinding::DoKey(DoKeyOp::ScrollDown)) => {
+                                            let page = self.terminal.output_bottom() as usize;
+                                            self.screen.scroll_down(page);
+                                            self.need_refresh = true;
+                                        }
+                                        _ => {
+                                            if let Some(line) = self.input.apply(action) {
+                                                self.dispatch_line(line).await;
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -378,22 +412,29 @@ impl EventLoop {
                 _ = sigwinch.recv() => {
                     if let Ok((w, h)) = crossterm::terminal::size() {
                         self.terminal.handle_resize(w, h);
+                        self.screen.resize(w as usize, self.terminal.output_bottom() as usize);
                         self.need_refresh = true;
                     }
                 }
 
                 // Graceful shutdown.
-                _ = sigterm.recv() => self.quit = true,
+                _ = sigterm.recv() => {
+                    self.fire_hook(Hook::SigTerm, "").await;
+                    self.quit = true;
+                }
                 _ = sigint.recv()  => self.quit = true,
-                _ = sighup.recv()  => self.quit = true,
+                _ = sighup.recv()  => {
+                    self.fire_hook(Hook::SigHup, "").await;
+                    self.quit = true;
+                }
 
                 // Timer tick.
                 _ = &mut timer => {
                     let now = Instant::now();
                     self.run_due_processes(now).await;
-                    self.check_mail(now);
+                    self.check_mail(now).await;
                     if self.need_refresh {
-                        let _ = self.terminal.flush();
+                        self.refresh_display();
                         self.need_refresh = false;
                     }
                 }
@@ -410,22 +451,25 @@ impl EventLoop {
         if line.starts_with('/') {
             self.run_command(&line).await;
         } else {
+            self.fire_hook_sync(Hook::Send, &line);
             self.send_to_active(&line).await;
         }
     }
 
     async fn run_command(&mut self, cmd: &str) {
         if let Err(e) = self.interp.exec_script(cmd) {
-            self.terminal.print_line(&format!("% Error: {e}"));
+            self.screen.push_line(LogicalLine::plain(&format!("% Error: {e}")));
             self.need_refresh = true;
         }
-        // Print interpreter output to terminal.
-        for line in self.interp.output.drain(..) {
-            self.terminal.print_line(&line);
+        // Push interpreter output to the screen.
+        let lines: Vec<String> = self.interp.output.drain(..).collect();
+        for line in lines {
+            self.screen.push_line(LogicalLine::plain(&line));
             self.need_refresh = true;
         }
         // Process queued side-effects.
-        for action in self.interp.take_actions() {
+        let actions: Vec<ScriptAction> = self.interp.take_actions();
+        for action in actions {
             self.handle_script_action(action).await;
         }
     }
@@ -458,8 +502,10 @@ impl EventLoop {
                     if self.active_world.as_deref() == Some(&n) {
                         self.active_world = self.handles.keys().next().cloned();
                     }
-                    self.terminal
-                        .print_line(&format!("** Disconnected from {n} **"));
+                    let msg = format!("** Disconnected from {n} **");
+                    self.screen.push_line(LogicalLine::plain(&msg));
+                    self.fire_hook_sync(Hook::Disconnect, &n);
+                    self.update_status();
                     self.need_refresh = true;
                 }
             }
@@ -468,12 +514,17 @@ impl EventLoop {
                 self.worlds.upsert(w);
             }
 
+            ScriptAction::DefMacro(mac) => {
+                let _ = self.macro_store.add(mac);
+            }
+
             ScriptAction::SwitchWorld { name } => {
                 if self.handles.contains_key(&name) {
                     self.active_world = Some(name);
+                    self.update_status();
                 } else {
-                    self.terminal
-                        .print_line(&format!("% No open connection to '{name}'"));
+                    let msg = format!("% No open connection to '{name}'");
+                    self.screen.push_line(LogicalLine::plain(&msg));
                     self.need_refresh = true;
                 }
             }
@@ -489,14 +540,14 @@ impl EventLoop {
             self.worlds.find(name).cloned()
         };
         let Some(w) = world else {
-            self.terminal
-                .print_line(&format!("% Unknown world '{name}'"));
+            let msg = format!("% Unknown world '{name}'");
+            self.screen.push_line(LogicalLine::plain(&msg));
             self.need_refresh = true;
             return;
         };
         if !w.is_connectable() {
-            self.terminal
-                .print_line(&format!("% World '{}' has no host/port", w.name));
+            let msg = format!("% World '{}' has no host/port", w.name);
+            self.screen.push_line(LogicalLine::plain(&msg));
             self.need_refresh = true;
             return;
         }
@@ -507,32 +558,66 @@ impl EventLoop {
         } else {
             self.connect(&w.name, host, port).await
         };
-        if let Err(e) = result {
-            self.terminal
-                .print_line(&format!("% Connect to '{}' failed: {e}", w.name));
-            self.need_refresh = true;
+        match result {
+            Ok(()) => {
+                let world_name = w.name.clone();
+                self.update_status();
+                self.fire_hook(Hook::Connect, &world_name).await;
+                self.need_refresh = true;
+            }
+            Err(e) => {
+                let notice = format!("% Connect to '{}' failed: {e}", w.name);
+                self.screen.push_line(LogicalLine::plain(&notice));
+                self.fire_hook(Hook::ConFail, &w.name).await;
+                self.need_refresh = true;
+            }
         }
     }
 
     // ── Net event dispatch ────────────────────────────────────────────────
 
     pub(crate) async fn handle_net_message(&mut self, msg: NetMessage) {
+        let is_active = self.active_world.as_deref() == Some(msg.world.as_str());
+
         match msg.event {
             NetEvent::Line(bytes) => {
-                if let Ok(text) = std::str::from_utf8(&bytes) {
-                    self.terminal.print_line(text);
-                    self.need_refresh = true;
+                let text = String::from_utf8_lossy(&bytes).into_owned();
+
+                // Trigger matching.
+                let world_filter = Some(msg.world.as_str());
+                let actions = self.macro_store.find_triggers(&text, world_filter);
+
+                // Determine gag and merged attr from trigger actions.
+                let gagged = actions.iter().any(|a| a.gag);
+
+                if !gagged {
+                    let line = LogicalLine::plain(&text);
+                    self.screen.push_line(line);
                 }
+
+                // Execute trigger bodies.
+                for ta in &actions {
+                    if let Some(body) = &ta.body {
+                        self.run_command(body).await;
+                    }
+                }
+
+                // Fire ACTIVITY (active world) or BGTEXT (background world).
+                let hook = if is_active { Hook::Activity } else { Hook::BgText };
+                self.fire_hook(hook, &text).await;
+
+                self.need_refresh = true;
             }
             NetEvent::Prompt(bytes) => {
-                if let Ok(text) = std::str::from_utf8(&bytes) {
-                    self.terminal.print_line(text);
-                    self.need_refresh = true;
-                }
+                let text = String::from_utf8_lossy(&bytes).into_owned();
+                let line = LogicalLine::plain(&text);
+                self.screen.push_line(line);
+                self.fire_hook(Hook::Prompt, &text).await;
+                self.need_refresh = true;
             }
             NetEvent::Gmcp(module, payload) => {
-                // Fire GMCP hooks — wired to MacroStore in Phase 10.
-                let _ = (module, payload);
+                let arg = format!("{module} {payload}");
+                self.fire_hook(Hook::Activity, &arg).await;
             }
             NetEvent::Atcp(func, val) => {
                 let _ = (func, val);
@@ -543,12 +628,47 @@ impl EventLoop {
                 if was_active {
                     self.active_world = self.handles.keys().next().cloned();
                 }
-                self.terminal.print_line(
-                    &format!("** Connection to {} closed **", msg.world),
-                );
+                let notice = format!("** Connection to {} closed **", msg.world);
+                self.screen.push_line(LogicalLine::plain(&notice));
+                self.fire_hook(Hook::Disconnect, &msg.world).await;
+                self.update_status();
                 self.need_refresh = true;
             }
         }
+    }
+
+    /// Fire all hooks of type `hook` with `args`, running matched macro bodies.
+    ///
+    /// Hook bodies are executed through the interpreter directly (without
+    /// re-entering `run_command`) to avoid async recursion cycles.
+    fn fire_hook_sync(&mut self, hook: Hook, args: &str) {
+        let actions = self.macro_store.find_hooks(hook, args);
+        for ta in actions {
+            if let Some(body) = ta.body {
+                if let Err(e) = self.interp.exec_script(&body) {
+                    let msg = format!("% Hook error: {e}");
+                    self.screen.push_line(LogicalLine::plain(&msg));
+                }
+                for line in self.interp.output.drain(..) {
+                    self.screen.push_line(LogicalLine::plain(&line));
+                }
+                // Drain simple actions (AddWorld, DefMacro) but skip
+                // Connect/Disconnect to avoid re-entrancy.
+                for action in self.interp.take_actions() {
+                    match action {
+                        ScriptAction::AddWorld(w) => { self.worlds.upsert(w); }
+                        ScriptAction::DefMacro(mac) => { self.macro_store.add(mac); }
+                        ScriptAction::Quit => { self.quit = true; }
+                        _ => {} // Connect/Disconnect/Send deferred
+                    }
+                }
+            }
+        }
+    }
+
+    /// Async wrapper for fire_hook_sync (for call sites outside action handlers).
+    async fn fire_hook(&mut self, hook: Hook, args: &str) {
+        self.fire_hook_sync(hook, args);
     }
 
     // ── Process scheduler ─────────────────────────────────────────────────
@@ -582,16 +702,44 @@ impl EventLoop {
 
     // ── Mail check ────────────────────────────────────────────────────────
 
-    fn check_mail(&mut self, now: Instant) {
+    async fn check_mail(&mut self, now: Instant) {
         if now < self.mail_next {
             return;
         }
         self.mail_next = now + MAIL_CHECK_INTERVAL;
-        if let Some(path) = &self.mail_path {
-            if std::fs::metadata(path).is_ok() {
-                // Full implementation fires the MAIL hook via MacroStore.
+        if let Some(path) = self.mail_path.clone() {
+            if std::fs::metadata(&path).is_ok() {
+                self.fire_hook(Hook::Mail, path.display().to_string().as_str()).await;
             }
         }
+    }
+
+    // ── Display ───────────────────────────────────────────────────────────
+
+    /// Rebuild the status bar from the current active world and time.
+    fn update_status(&mut self) {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let world = self.active_world.as_deref().unwrap_or("(no world)");
+        // Simple HH:MM clock from system time.
+        let secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let hh = (secs % 86400) / 3600;
+        let mm = (secs % 3600) / 60;
+        self.status = StatusLine::new(format!("[ {world} ]  {hh:02}:{mm:02}"));
+    }
+
+    /// Render the screen and status bar, then flush.
+    fn refresh_display(&mut self) {
+        self.update_status();
+        let status = self.status.clone();
+        let _ = self.terminal.render_screen(&self.screen);
+        let _ = self.terminal.render_status(std::slice::from_ref(&status));
+        if self.screen.paused {
+            let _ = self.terminal.show_more_prompt();
+        }
+        let _ = self.terminal.flush();
     }
 
     // ── Shutdown ──────────────────────────────────────────────────────────

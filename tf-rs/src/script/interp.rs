@@ -8,6 +8,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::hook::{Hook, HookSet};
+use crate::macros::Macro;
+use crate::pattern::{MatchMode, Pattern};
 use super::{
     builtins::call_builtin,
     expand::expand,
@@ -35,6 +38,8 @@ pub enum ScriptAction {
     AddWorld(crate::world::World),
     /// Switch the active world.
     SwitchWorld { name: String },
+    /// Define (or redefine) a macro in the MacroStore.
+    DefMacro(Macro),
     /// Terminate the event loop.
     Quit,
 }
@@ -294,9 +299,15 @@ impl Interpreter {
             }
 
             // ── Macro definition ───────────────────────────────────────────────
-            "def" => {
+            "def" | "trigger" | "hook" | "bind" => {
                 // /def [-flags…] name = body
-                exec_def(args, &mut self.macros);
+                let mac = parse_def(args);
+                if let Some(name) = &mac.name {
+                    if let Some(body) = &mac.body {
+                        self.macros.insert(name.clone(), body.clone());
+                    }
+                }
+                self.actions.push(ScriptAction::DefMacro(mac));
                 Ok(None)
             }
 
@@ -478,42 +489,141 @@ fn try_parse_number(s: &str) -> Value {
     }
 }
 
-/// Parse `/def [-flags…] name = body` and insert into the macro map.
+/// Parse `/def [-flags…] [name] [= body]` into a [`Macro`].
 ///
-/// Flags are skipped (they control triggers/hooks/priority, which are Phase 13).
-/// The only thing we extract is the `name = body` pair.
-fn exec_def(raw: &str, macros: &mut HashMap<String, String>) {
+/// Handles the most common flags: `-t`, `-h`, `-p`, `-P`, `-n`, `-w`, `-b`,
+/// `-B`, `-T`, `-E`, `-f`, `-q`, `-i`.  Unknown flags are silently skipped.
+fn parse_def(raw: &str) -> Macro {
+    let mut mac = Macro::new();
     let mut rest = raw.trim();
+    let mut mode = MatchMode::Glob; // TF default trigger mode
 
-    // Skip flag tokens (start with `-`).
     while rest.starts_with('-') {
-        let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
-        let flag = &rest[1..end]; // flag chars after the `-`
-        rest = rest[end..].trim_start();
+        // Consume the flag token (may have the value embedded, e.g. `-t pattern`
+        // can be written as `-tpattern`).
+        let tok_end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+        let tok = &rest[1..tok_end]; // everything after the leading `-`
+        rest = rest[tok_end..].trim_start();
 
-        // Flags that consume one additional token: -p -g -b -t -h -s -w -n -m -c -T -E
-        // If the flag part is a single letter that requires an arg AND no arg was
-        // embedded directly in the flag token, consume the next word.
-        if flag.len() == 1
-            && matches!(
-                flag.chars().next(),
-                Some('p' | 'g' | 'b' | 't' | 'h' | 's' | 'w' | 'n' | 'm' | 'c' | 'T' | 'E')
-            )
-        {
-            // Only consume next token if the flag had no embedded arg.
-            let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
-            rest = rest[end..].trim_start();
+        if tok.is_empty() {
+            continue;
+        }
+        let flag = &tok[..1];
+        let inline = if tok.len() > 1 { &tok[1..] } else { "" };
+
+        // Helper: get flag value — inline if present, else consume next token.
+        let get_val = |inline: &str, rest: &mut &str| -> String {
+            if !inline.is_empty() {
+                inline.to_owned()
+            } else {
+                let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+                let v = rest[..end].to_owned();
+                *rest = rest[end..].trim_start();
+                v
+            }
+        };
+
+        match flag {
+            "t" => {
+                let pat = get_val(inline, &mut rest);
+                if !pat.is_empty() {
+                    mac.trig = Pattern::new(&pat, mode).ok();
+                }
+            }
+            "h" => {
+                let spec = get_val(inline, &mut rest);
+                let mut hs = HookSet::NONE;
+                for name in spec.split('|') {
+                    if let Ok(h) = name.trim().parse::<Hook>() {
+                        hs.insert(h);
+                    }
+                }
+                mac.hooks = hs;
+                // Pattern for hook args comes after; if the next token isn't a
+                // flag or `=`, treat it as the hargs pattern.
+                if !rest.is_empty() && !rest.starts_with('-') && !rest.starts_with('=') {
+                    let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+                    let harg = &rest[..end];
+                    if !harg.contains('=') {
+                        mac.hargs = Pattern::new(harg, MatchMode::Glob).ok();
+                        rest = rest[end..].trim_start();
+                    }
+                }
+            }
+            "p" => {
+                let v = get_val(inline, &mut rest);
+                mac.priority = v.parse().unwrap_or(1);
+            }
+            "P" => {
+                let v = get_val(inline, &mut rest);
+                mac.probability = v.parse::<u8>().unwrap_or(100).min(100);
+            }
+            "n" => {
+                let v = get_val(inline, &mut rest);
+                mac.shots = v.parse().unwrap_or(0);
+            }
+            "w" => {
+                let v = get_val(inline, &mut rest);
+                mac.world = Some(v);
+            }
+            "b" => {
+                let v = get_val(inline, &mut rest);
+                mac.bind = Some(v);
+            }
+            "B" => {
+                let v = get_val(inline, &mut rest);
+                mac.keyname = Some(v);
+            }
+            "T" => {
+                let v = get_val(inline, &mut rest);
+                mac.wtype = Pattern::new(&v, MatchMode::Glob).ok();
+            }
+            "E" => {
+                let v = get_val(inline, &mut rest);
+                mac.expr = Some(v);
+            }
+            "s" => {
+                // Pattern mode: exact=simple, glob, regexp, substr
+                let v = get_val(inline, &mut rest);
+                mode = match v.as_str() {
+                    "regexp" | "re" => MatchMode::Regexp,
+                    "simple" | "exact" => MatchMode::Simple,
+                    "substr" | "sub" => MatchMode::Substr,
+                    _ => MatchMode::Glob,
+                };
+            }
+            "f" => mac.fallthru = true,
+            "q" => mac.quiet = true,
+            "i" => mac.invisible = true,
+            // -g (gag), -a (attr), -c (color) — skip value
+            "g" | "a" | "c" | "m" => {
+                get_val(inline, &mut rest);
+            }
+            _ => {
+                // Unknown single-char flag with possible value — skip value
+                // if the flag letter is lowercase and typically takes an arg.
+                if !inline.is_empty() {
+                    // value was inline, already consumed
+                } else if tok.len() == 1 {
+                    // might be a boolean flag, nothing to skip
+                }
+            }
         }
     }
 
-    // rest = "name = body"  or  "name"  (listing — ignore)
+    // rest = "[name] [= body]"  or  "" (bare `/def` — listing, ignored)
     if let Some(eq) = rest.find('=') {
         let name = rest[..eq].trim();
         let body = rest[eq + 1..].trim();
         if !name.is_empty() {
-            macros.insert(name.to_owned(), body.to_owned());
+            mac.name = Some(name.to_owned());
         }
+        mac.body = Some(body.to_owned());
+    } else if !rest.is_empty() {
+        mac.name = Some(rest.to_owned());
     }
+
+    mac
 }
 
 /// Extract the `-q` (quiet) flag and remaining path from `/load` args.
@@ -723,5 +833,49 @@ mod tests {
         interp.exec_script("/connect mymud").unwrap();
         let actions = interp.take_actions();
         assert!(matches!(&actions[0], ScriptAction::Connect { name } if name == "mymud"));
+    }
+
+    // ── Phase 13: /def flag parsing ───────────────────────────────────────────
+
+    #[test]
+    fn def_queues_def_macro_action() {
+        let mut interp = Interpreter::new();
+        interp.exec_script("/def foo = /echo bar").unwrap();
+        let actions = interp.take_actions();
+        assert!(matches!(&actions[0], ScriptAction::DefMacro(m) if m.name.as_deref() == Some("foo")));
+    }
+
+    #[test]
+    fn def_trigger_flag_parsed() {
+        let mac = parse_def("-t ^hello name = body");
+        assert!(mac.trig.is_some(), "trigger pattern should be set");
+        assert_eq!(mac.name.as_deref(), Some("name"));
+        assert_eq!(mac.body.as_deref(), Some("body"));
+    }
+
+    #[test]
+    fn def_priority_flag_parsed() {
+        let mac = parse_def("-p 10 foo = bar");
+        assert_eq!(mac.priority, 10);
+    }
+
+    #[test]
+    fn def_hook_flag_parsed() {
+        let mac = parse_def("-h CONNECT foo = bar");
+        assert!(!mac.hooks.is_empty(), "hooks should be set");
+    }
+
+    #[test]
+    fn def_fallthru_quiet_invisible() {
+        let mac = parse_def("-f -q -i foo = bar");
+        assert!(mac.fallthru);
+        assert!(mac.quiet);
+        assert!(mac.invisible);
+    }
+
+    #[test]
+    fn def_probability_flag() {
+        let mac = parse_def("-P 75 foo = body");
+        assert_eq!(mac.probability, 75);
     }
 }

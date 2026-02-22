@@ -51,6 +51,10 @@ pub enum DoKeyOp {
     SearchForward,
     /// Selective flush (`/dokey selflush`).
     SelFlush,
+    /// Scroll the output window up one page (`/dokey scrollup`).
+    ScrollUp,
+    /// Scroll the output window down one page (`/dokey scrolldown`).
+    ScrollDown,
 }
 
 impl DoKeyOp {
@@ -71,6 +75,8 @@ impl DoKeyOp {
             DoKeyOp::SearchBackward => "SEARCHB",
             DoKeyOp::SearchForward  => "SEARCHF",
             DoKeyOp::SelFlush       => "SELFLUSH",
+            DoKeyOp::ScrollUp       => "SCROLLUP",
+            DoKeyOp::ScrollDown     => "SCROLLDOWN",
         }
     }
 
@@ -90,6 +96,8 @@ impl DoKeyOp {
         DoKeyOp::SearchBackward,
         DoKeyOp::SearchForward,
         DoKeyOp::SelFlush,
+        DoKeyOp::ScrollUp,
+        DoKeyOp::ScrollDown,
     ];
 
     /// Parse a name (case-insensitive).
@@ -250,9 +258,9 @@ impl Keymap {
         self.bind(b"\x1b[1;3C".to_vec(), KeyBinding::Macro("/dokey_fword".into())); // Alt+Right
         self.bind(b"\x1b[1;3D".to_vec(), KeyBinding::Macro("/dokey_bword".into())); // Alt+Left
 
-        // History.
-        self.bind(b"\x1b[5~".to_vec(), KeyBinding::DoKey(SearchBackward)); // PgUp
-        self.bind(b"\x1b[6~".to_vec(), KeyBinding::DoKey(SearchForward));  // PgDn
+        // Scrollback.
+        self.bind(b"\x1b[5~".to_vec(), KeyBinding::DoKey(ScrollUp));   // PgUp
+        self.bind(b"\x1b[6~".to_vec(), KeyBinding::DoKey(ScrollDown)); // PgDn
 
         self
     }
@@ -564,5 +572,29 @@ mod tests {
         let mut ip = InputProcessor::new(100);
         ip.apply(EditAction::Bound(KeyBinding::DoKey(DoKeyOp::LiteralNext)));
         assert!(ip.literal_next);
+    }
+
+    // ── Phase 13: scroll key bindings ─────────────────────────────────────────
+
+    #[test]
+    fn pgup_bound_to_scroll_up() {
+        let km = Keymap::new().with_defaults();
+        // PgUp = ESC [ 5 ~
+        let binding = km.lookup(b"\x1b[5~").expect("PgUp should be bound");
+        assert_eq!(binding, &KeyBinding::DoKey(DoKeyOp::ScrollUp));
+    }
+
+    #[test]
+    fn pgdn_bound_to_scroll_down() {
+        let km = Keymap::new().with_defaults();
+        // PgDn = ESC [ 6 ~
+        let binding = km.lookup(b"\x1b[6~").expect("PgDn should be bound");
+        assert_eq!(binding, &KeyBinding::DoKey(DoKeyOp::ScrollDown));
+    }
+
+    #[test]
+    fn scroll_ops_round_trip_name() {
+        assert_eq!(DoKeyOp::from_name("SCROLLUP"), Some(DoKeyOp::ScrollUp));
+        assert_eq!(DoKeyOp::from_name("SCROLLDOWN"), Some(DoKeyOp::ScrollDown));
     }
 }
