@@ -5,14 +5,53 @@ on:
     branches: [ 'main' ]
   pull_request:
     branches: [ '**' ]
-  #schedule:
-  #  # * is a special character in YAML so you have to quote this string
-  #  - cron: '22 3 22 * *'
-    
+
 jobs:
+  # ── Rust build & test (primary — Phase 15 cutover) ───────────────────────
   build:
     runs-on: ubuntu-latest
-    
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Default build: no optional scripting engines.
+          - cargo_flags: ""
+            apt_packages: ""
+          # Lua 5.4 embedding via mlua.
+          - cargo_flags: "--features lua"
+            apt_packages: "lua5.4 liblua5.4-dev"
+          # Python embedding via pyo3.
+          - cargo_flags: "--features python"
+            apt_packages: "python3-dev"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install extra packages
+        if: matrix.apt_packages != ''
+        run: sudo apt-get install -y ${{ matrix.apt_packages }}
+
+      - name: Build
+        run: cargo build ${{ matrix.cargo_flags }}
+
+      - name: Test
+        run: cargo test ${{ matrix.cargo_flags }}
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Clippy
+        run: cargo clippy -- -D warnings
+
+  # ── Legacy C build (archived) ─────────────────────────────────────────────
+  # These jobs built the original C binary.  Kept for reference; disabled
+  # following the Phase 15 cutover to the Rust binary.
+  build-c:
+    if: false
+    runs-on: ubuntu-latest
+
     strategy:
       fail-fast: false
       matrix:
@@ -21,8 +60,7 @@ jobs:
           - "--enable-lua"
           - "--enable-python"
           - "--disable-widechar"
-#          - "--enable-lua --enable-python"
-    
+
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -37,7 +75,8 @@ jobs:
       - name: Install
         run: make install
 
-  build-maxos:
+  build-c-macos:
+    if: false
     runs-on: macos-latest
 
     strategy:
@@ -45,10 +84,8 @@ jobs:
       matrix:
         python-version: ['3.12', '3.13']
         opts:
-#          - "--enable-lua"
           - "--enable-python"
           - "--disable-widechar"
-    #          - "--enable-lua --enable-python"
 
     steps:
       - uses: actions/checkout@v4
@@ -58,41 +95,6 @@ jobs:
           echo "/usr/local/opt/python@${{ matrix.python-version }}/bin" >> $GITHUB_PATH
       - name: Configure
         run: ./configure --enable-version --enable-symlink --enable-atcp --enable-gmcp --enable-option102 ${{ matrix.opts }}
-      - name: Build
-        run: make
-      - name: Install
-        run: make install
-
-  build-rust:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build
-        run: cargo build
-      - name: Test
-        run: cargo test
-
-  # disable for now
-  build_windows:
-    # disable for now
-    if: false
-    runs-on: windows-latest
-    steps:
-      - name: Set git to use LF
-        run: |
-          git config --global core.autocrlf false
-          git config --global core.eol lf
-      - uses: actions/checkout@v2
-      - uses: egor-tensin/setup-cygwin@v1
-        with:
-          platform: x86
-          packages: gcc-core make libpcre-devel lua liblua-devel python3-devel libintl-devel
-      - name: Create home dir
-        run: |
-          C:\tools\cygwin\bin\bash.exe --login -c 'env'
-      - name: Configure
-        run: |
-          sh configure --enable-version --enable-symlink --enable-atcp --enable-gmcp --enable-option102 --enable-lua --enable-python
       - name: Build
         run: make
       - name: Install

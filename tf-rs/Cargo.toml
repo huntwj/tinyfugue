@@ -9,7 +9,7 @@ name = "tf"
 path = "src/lib.rs"
 
 [[bin]]
-name = "tf-rust"
+name = "tf"
 path = "src/main.rs"
 
 [features]

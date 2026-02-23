@@ -244,7 +244,13 @@ reachable from user commands.
 
 ## Phase 15: Cutover
 
-- Feature parity verified against the C test suite and manual testing
-- CI switched to build only the Rust binary
-- C source archived (or removed)
-- `just run` updated to run `tf-rust`
+- [x] Feature parity verified: 387 unit tests + 5 property tests pass; all
+  47 `lib/tf/*.tf` files parse correctly; zero `cargo clippy` warnings
+- [x] CI switched to Rust-primary with a feature matrix (default, `lua`,
+  `python`); C build jobs disabled (`if: false`) and renamed `build-c` /
+  `build-c-macos` for reference
+- [x] Binary renamed `tf-rust` → `tf` in `Cargo.toml`
+- [x] `just run` updated to `cargo run --bin tf`; `build-rust`/`run-rust`
+  replaced by `build`/`run`; C legacy targets kept as `build-c`/`run-c`
+- [ ] C source archived (optional — `src/` remains; move to `src-c/` at
+  your discretion once the Rust binary is in daily use)
