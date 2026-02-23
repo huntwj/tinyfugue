@@ -242,6 +242,9 @@ pub struct EventLoop {
 
     /// True when the screen needs a full redraw.
     need_refresh: bool,
+
+    /// Open log file (mirrors `/log path`).
+    log_file: Option<std::fs::File>,
 }
 
 impl EventLoop {
@@ -272,6 +275,7 @@ impl EventLoop {
             mail_path: None,
             mail_next: Instant::now() + MAIL_CHECK_INTERVAL,
             need_refresh: false,
+            log_file: None,
         }
     }
 
@@ -528,6 +532,142 @@ impl EventLoop {
                     self.need_refresh = true;
                 }
             }
+
+            // ── Process scheduling ─────────────────────────────────────────
+
+            ScriptAction::AddRepeat { interval_ms, count, body, world } => {
+                let interval = Duration::from_millis(interval_ms);
+                self.scheduler.add_repeat(body, interval, count, world);
+            }
+
+            ScriptAction::AddQuoteFile { interval_ms, path, world } => {
+                let interval = Duration::from_millis(interval_ms);
+                self.scheduler.add_quote_file(PathBuf::from(path), interval, -1, world);
+            }
+
+            ScriptAction::AddQuoteShell { interval_ms, command, world } => {
+                let interval = Duration::from_millis(interval_ms);
+                self.scheduler.add_quote_shell(command, interval, -1, world);
+            }
+
+            // ── Macro / binding management ────────────────────────────────
+
+            ScriptAction::UndefMacro(name) => {
+                self.macro_store.remove_by_name(&name);
+            }
+
+            ScriptAction::UnbindKey(seq) => {
+                let bytes = crate::keybind::key_sequence(&seq);
+                self.key_decoder.keymap.unbind(&bytes);
+            }
+
+            // ── Introspection ─────────────────────────────────────────────
+
+            ScriptAction::ListWorlds => {
+                let lines: Vec<String> = self.worlds.iter()
+                    .map(|w| format!("  {:<20} {}:{}",
+                        w.name,
+                        w.host.as_deref().unwrap_or("-"),
+                        w.port.as_deref().unwrap_or("23")))
+                    .collect();
+                if lines.is_empty() {
+                    self.screen.push_line(LogicalLine::plain("% No worlds defined."));
+                } else {
+                    self.screen.push_line(LogicalLine::plain("% Worlds:"));
+                    for line in lines {
+                        self.screen.push_line(LogicalLine::plain(&line));
+                    }
+                }
+                self.need_refresh = true;
+            }
+
+            ScriptAction::ListMacros { filter } => {
+                let lines: Vec<String> = self.macro_store.iter()
+                    .filter(|m| match &filter {
+                        Some(f) => m.name.as_deref().is_some_and(|n| n.starts_with(f.as_str())),
+                        None => true,
+                    })
+                    .map(|m| format!("  /def {} = {}",
+                        m.name.as_deref().unwrap_or("(unnamed)"),
+                        m.body.as_deref().unwrap_or("")))
+                    .collect();
+                if lines.is_empty() {
+                    self.screen.push_line(LogicalLine::plain("% No macros defined."));
+                } else {
+                    for line in lines {
+                        self.screen.push_line(LogicalLine::plain(&line));
+                    }
+                }
+                self.need_refresh = true;
+            }
+
+            // ── Session logging ───────────────────────────────────────────
+
+            ScriptAction::StartLog(path) => {
+                match std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+                    Ok(file) => {
+                        self.log_file = Some(file);
+                        let msg = format!("% Logging to {path}");
+                        self.screen.push_line(LogicalLine::plain(&msg));
+                    }
+                    Err(e) => {
+                        self.screen.push_line(LogicalLine::plain(&format!("% /log: {e}")));
+                    }
+                }
+                self.need_refresh = true;
+            }
+
+            ScriptAction::StopLog => {
+                if self.log_file.take().is_some() {
+                    self.screen.push_line(LogicalLine::plain("% Logging stopped."));
+                }
+                self.need_refresh = true;
+            }
+
+            // ── Lua scripting ─────────────────────────────────────────────
+
+            #[cfg(feature = "lua")]
+            ScriptAction::LuaLoad(_path) => {
+                self.screen.push_line(LogicalLine::plain(
+                    "% /loadlua: Lua engine not yet connected to event loop"));
+                self.need_refresh = true;
+            }
+
+            #[cfg(feature = "lua")]
+            ScriptAction::LuaCall { .. } => {
+                self.screen.push_line(LogicalLine::plain(
+                    "% /calllua: Lua engine not yet connected to event loop"));
+                self.need_refresh = true;
+            }
+
+            #[cfg(feature = "lua")]
+            ScriptAction::LuaPurge => {}
+
+            // ── Python scripting ──────────────────────────────────────────
+
+            #[cfg(feature = "python")]
+            ScriptAction::PythonExec(_) => {
+                self.screen.push_line(LogicalLine::plain(
+                    "% /python: Python engine not yet connected to event loop"));
+                self.need_refresh = true;
+            }
+
+            #[cfg(feature = "python")]
+            ScriptAction::PythonCall { .. } => {
+                self.screen.push_line(LogicalLine::plain(
+                    "% /callpython: Python engine not yet connected to event loop"));
+                self.need_refresh = true;
+            }
+
+            #[cfg(feature = "python")]
+            ScriptAction::PythonLoad(_) => {
+                self.screen.push_line(LogicalLine::plain(
+                    "% /loadpython: Python engine not yet connected to event loop"));
+                self.need_refresh = true;
+            }
+
+            #[cfg(feature = "python")]
+            ScriptAction::PythonKill => {}
         }
     }
 
@@ -593,6 +733,11 @@ impl EventLoop {
                 if !gagged {
                     let line = LogicalLine::plain(&text);
                     self.screen.push_line(line);
+                    // Write to log file if open.
+                    if let Some(ref mut f) = self.log_file {
+                        use std::io::Write;
+                        let _ = writeln!(f, "{text}");
+                    }
                 }
 
                 // Execute trigger bodies.
@@ -676,26 +821,89 @@ impl EventLoop {
     async fn run_due_processes(&mut self, now: Instant) {
         let ready = self.scheduler.take_ready(now);
         for mut proc in ready {
-            self.execute_process(&proc).await;
-            if proc.tick() {
+            let keep = self.execute_process(&mut proc).await;
+            if keep && proc.tick() {
                 self.scheduler.reschedule(proc);
             }
         }
     }
 
-    async fn execute_process(&mut self, proc: &crate::process::Proc) {
+    /// Execute one scheduled process tick, returning `false` when it should be
+    /// removed even if its run count hasn't expired (e.g. QuoteFile reached EOF).
+    async fn execute_process(&mut self, proc: &mut crate::process::Proc) -> bool {
         use crate::process::ProcKind;
-        match &proc.kind {
+        match &mut proc.kind {
             ProcKind::Repeat { body } => {
-                let world = proc.world.clone().or_else(|| self.active_world.clone());
-                if let Some(w) = world {
-                    if let Some(handle) = self.handles.get(&w) {
-                        handle.send_line(body).await;
+                let body = body.clone();
+                // Repeat bodies that look like TF commands are dispatched through
+                // the interpreter; plain text is sent to the world.
+                if body.starts_with('/') {
+                    self.run_command(&body).await;
+                } else {
+                    let world = proc.world.clone().or_else(|| self.active_world.clone());
+                    if let Some(w) = world {
+                        if let Some(handle) = self.handles.get(&w) {
+                            handle.send_line(&body).await;
+                        }
                     }
                 }
+                true
             }
-            ProcKind::QuoteFile { .. } | ProcKind::QuoteShell { .. } => {
-                // Full implementation in Phase 10 with tokio::process.
+
+            ProcKind::QuoteFile { path, pos } => {
+                use std::io::{BufRead, Seek, SeekFrom};
+                let path = path.clone();
+                let offset = *pos;
+                // Read one line from the file at the current offset.
+                let result: Option<(String, u64)> = (|| {
+                    let mut file = std::fs::File::open(&path).ok()?;
+                    file.seek(SeekFrom::Start(offset)).ok()?;
+                    let mut reader = std::io::BufReader::new(file);
+                    let mut line = String::new();
+                    let n = reader.read_line(&mut line).ok()?;
+                    if n == 0 {
+                        return None; // EOF
+                    }
+                    let new_pos = offset + n as u64;
+                    // Strip trailing \r\n.
+                    let trimmed = line.trim_end_matches('\n').trim_end_matches('\r').to_owned();
+                    Some((trimmed, new_pos))
+                })();
+                if let Some((line, new_pos)) = result {
+                    *pos = new_pos;
+                    let world = proc.world.clone().or_else(|| self.active_world.clone());
+                    if let Some(w) = world {
+                        if let Some(handle) = self.handles.get(&w) {
+                            handle.send_line(&line).await;
+                        }
+                    }
+                    true
+                } else {
+                    false // EOF — stop the process
+                }
+            }
+
+            ProcKind::QuoteShell { command } => {
+                // Run the shell command once and send each line of its stdout
+                // to the active world.  One-shot: always returns `false`.
+                let command = command.clone();
+                let world = proc.world.clone().or_else(|| self.active_world.clone());
+                let output = tokio::process::Command::new("sh")
+                    .arg("-c")
+                    .arg(&command)
+                    .output()
+                    .await;
+                if let Ok(out) = output {
+                    let text = String::from_utf8_lossy(&out.stdout);
+                    for line in text.lines() {
+                        if let Some(ref w) = world {
+                            if let Some(handle) = self.handles.get(w) {
+                                handle.send_line(line).await;
+                            }
+                        }
+                    }
+                }
+                false
             }
         }
     }

@@ -42,6 +42,57 @@ pub enum ScriptAction {
     DefMacro(Macro),
     /// Terminate the event loop.
     Quit,
+
+    // ── Process scheduling ─────────────────────────────────────────────────
+    /// Schedule a `/repeat` process.
+    AddRepeat { interval_ms: u64, count: i32, body: String, world: Option<String> },
+    /// Schedule a `/quote 'file` process.
+    AddQuoteFile { interval_ms: u64, path: String, world: Option<String> },
+    /// Schedule a `/quote !cmd` process.
+    AddQuoteShell { interval_ms: u64, command: String, world: Option<String> },
+
+    // ── Macro / binding management ─────────────────────────────────────────
+    /// Remove a named macro (mirrors `/undef`).
+    UndefMacro(String),
+    /// Remove a key binding by sequence string (mirrors `/unbind`).
+    UnbindKey(String),
+
+    // ── Introspection ──────────────────────────────────────────────────────
+    /// Display all defined worlds.
+    ListWorlds,
+    /// Display macros (optionally filtered by name prefix).
+    ListMacros { filter: Option<String> },
+
+    // ── Session logging ────────────────────────────────────────────────────
+    /// Open a log file (mirrors `/log path`).
+    StartLog(String),
+    /// Close the current log file (mirrors `/nolog`).
+    StopLog,
+
+    // ── Lua scripting (requires the `lua` Cargo feature) ──────────────────
+    /// Load and execute a Lua source file (`/loadlua path`).
+    #[cfg(feature = "lua")]
+    LuaLoad(String),
+    /// Call a named Lua function with string arguments (`/calllua func args…`).
+    #[cfg(feature = "lua")]
+    LuaCall { func: String, args: Vec<String> },
+    /// Drop the Lua interpreter (`/purgelua`).
+    #[cfg(feature = "lua")]
+    LuaPurge,
+
+    // ── Python scripting (requires the `python` Cargo feature) ────────────
+    /// Execute Python statements (`/python code`).
+    #[cfg(feature = "python")]
+    PythonExec(String),
+    /// Call a named Python function with one string argument (`/callpython func arg`).
+    #[cfg(feature = "python")]
+    PythonCall { func: String, arg: String },
+    /// Import or reload a Python module (`/loadpython module`).
+    #[cfg(feature = "python")]
+    PythonLoad(String),
+    /// Destroy the Python interpreter (`/killpython`).
+    #[cfg(feature = "python")]
+    PythonKill,
 }
 
 // ── File loader callback ──────────────────────────────────────────────────────
@@ -108,6 +159,11 @@ impl Interpreter {
     /// Define a user macro (name → TF script source).
     pub fn define_macro(&mut self, name: impl Into<String>, body: impl Into<String>) {
         self.macros.insert(name.into(), body.into());
+    }
+
+    /// Remove a user macro by name.  Returns `true` if it existed.
+    pub fn undef_macro(&mut self, name: &str) -> bool {
+        self.macros.remove(name).is_some()
     }
 
     /// Set a global variable.
@@ -401,6 +457,154 @@ impl Interpreter {
                 Ok(None)
             }
 
+            // ── Macro removal ─────────────────────────────────────────────────
+            "undef" => {
+                let expanded = expand(args, self)?;
+                let n = expanded.trim().to_owned();
+                self.macros.remove(&n);
+                self.actions.push(ScriptAction::UndefMacro(n));
+                Ok(None)
+            }
+
+            // ── Key binding removal ────────────────────────────────────────────
+            "unbind" => {
+                let expanded = expand(args, self)?;
+                self.actions.push(ScriptAction::UnbindKey(expanded.trim().to_owned()));
+                Ok(None)
+            }
+
+            // ── Process scheduling ─────────────────────────────────────────────
+            "repeat" => {
+                let expanded = expand(args, self)?;
+                let (interval_ms, count, body, world) = parse_repeat_args(expanded.trim());
+                self.actions.push(ScriptAction::AddRepeat { interval_ms, count, body, world });
+                Ok(None)
+            }
+
+            "quote" => {
+                let expanded = expand(args, self)?;
+                let trimmed: &str = expanded.trim();
+                // Format: /quote [/interval] 'file   or   /quote [/interval] !cmd
+                let (interval_ms, rest) = parse_quote_interval(trimmed);
+                if let Some(path) = rest.strip_prefix('\'') {
+                    self.actions.push(ScriptAction::AddQuoteFile {
+                        interval_ms,
+                        path: path.to_owned(),
+                        world: None,
+                    });
+                } else if let Some(cmd) = rest.strip_prefix('!') {
+                    self.actions.push(ScriptAction::AddQuoteShell {
+                        interval_ms,
+                        command: cmd.to_owned(),
+                        world: None,
+                    });
+                } else {
+                    self.output.push("% /quote: expected 'file or !command".to_owned());
+                }
+                Ok(None)
+            }
+
+            // ── Introspection ──────────────────────────────────────────────────
+            "listworlds" | "worlds" => {
+                self.actions.push(ScriptAction::ListWorlds);
+                Ok(None)
+            }
+
+            "list" | "listdefs" => {
+                let filter = {
+                    let expanded = expand(args, self)?;
+                    let s = expanded.trim().to_owned();
+                    if s.is_empty() { None } else { Some(s) }
+                };
+                self.actions.push(ScriptAction::ListMacros { filter });
+                Ok(None)
+            }
+
+            // ── Logging ───────────────────────────────────────────────────────
+            "log" => {
+                let expanded = expand(args, self)?;
+                let path = expanded.trim();
+                if path.is_empty() {
+                    self.output.push("% /log: missing filename".to_owned());
+                } else {
+                    self.actions.push(ScriptAction::StartLog(path.to_owned()));
+                }
+                Ok(None)
+            }
+
+            "nolog" => {
+                self.actions.push(ScriptAction::StopLog);
+                Ok(None)
+            }
+
+            // ── Help ──────────────────────────────────────────────────────────
+            "help" => {
+                self.output.push("TF commands: /connect /disconnect /world /addworld \
+                    /def /undef /load /repeat /quote /log /nolog /list /listworlds \
+                    /echo /eval /quit".to_owned());
+                Ok(None)
+            }
+
+            // ── Lua scripting ──────────────────────────────────────────────────
+            #[cfg(feature = "lua")]
+            "loadlua" => {
+                let expanded = expand(args, self)?;
+                self.actions.push(ScriptAction::LuaLoad(expanded.trim().to_owned()));
+                Ok(None)
+            }
+
+            #[cfg(feature = "lua")]
+            "calllua" => {
+                let expanded = expand(args, self)?;
+                let mut parts = expanded.splitn(2, char::is_whitespace);
+                let func = parts.next().unwrap_or("").to_owned();
+                let rest = parts.next().unwrap_or("").trim().to_owned();
+                let args: Vec<String> = if rest.is_empty() {
+                    vec![]
+                } else {
+                    rest.split_whitespace().map(str::to_owned).collect()
+                };
+                self.actions.push(ScriptAction::LuaCall { func, args });
+                Ok(None)
+            }
+
+            #[cfg(feature = "lua")]
+            "purgelua" => {
+                self.actions.push(ScriptAction::LuaPurge);
+                Ok(None)
+            }
+
+            // ── Python scripting ───────────────────────────────────────────────
+            #[cfg(feature = "python")]
+            "python" => {
+                let expanded = expand(args, self)?;
+                self.actions.push(ScriptAction::PythonExec(expanded));
+                Ok(None)
+            }
+
+            #[cfg(feature = "python")]
+            "callpython" => {
+                let expanded = expand(args, self)?;
+                let mut parts = expanded.splitn(2, char::is_whitespace);
+                let func = parts.next().unwrap_or("").to_owned();
+                let arg = parts.next().unwrap_or("").trim().to_owned();
+                self.actions.push(ScriptAction::PythonCall { func, arg });
+                Ok(None)
+            }
+
+            #[cfg(feature = "python")]
+            "loadpython" => {
+                let expanded = expand(args, self)?;
+                self.actions.push(ScriptAction::PythonLoad(expanded.trim().to_owned()));
+                Ok(None)
+            }
+
+            #[cfg(feature = "python")]
+            "killpython" => {
+                self.actions.push(ScriptAction::PythonKill);
+                Ok(None)
+            }
+
             // ── Unknown — silently ignore (like the C source) ──────────────────
             _ => Ok(None),
         }
@@ -646,6 +850,65 @@ fn parse_load_flags(args: &str) -> (bool, &str) {
     (quiet, rest)
 }
 
+/// Parse `/repeat [-w world] interval [count] body` into `(interval_ms, count, body, world)`.
+///
+/// - `interval` is in seconds (may be a float); converted to milliseconds.
+/// - `count` is optional; if the second token is also an integer it is the
+///   count, otherwise count defaults to `-1` (run forever).
+/// - Everything after the interval (and optional count) is the body.
+fn parse_repeat_args(s: &str) -> (u64, i32, String, Option<String>) {
+    let mut rest = s;
+    let mut world: Option<String> = None;
+
+    // Optional `-w <world>` flag.
+    if let Some(r) = rest.strip_prefix("-w").map(str::trim_start) {
+        let end = r.find(char::is_whitespace).unwrap_or(r.len());
+        world = Some(r[..end].to_owned());
+        rest = r[end..].trim_start();
+    }
+
+    let mut parts = rest.splitn(3, char::is_whitespace);
+    let interval_str = parts.next().unwrap_or("0");
+    let interval_secs: f64 = interval_str.trim().parse().unwrap_or(0.0);
+    let interval_ms = (interval_secs * 1000.0).max(1.0) as u64;
+
+    let second = parts.next().unwrap_or("").trim();
+    let (count, body) = if let Ok(n) = second.parse::<i32>() {
+        let b = parts.next().unwrap_or("").trim().to_owned();
+        (n, b)
+    } else {
+        // second token is the beginning of the body
+        let tail = parts.next().unwrap_or("").trim();
+        let b = if tail.is_empty() {
+            second.to_owned()
+        } else {
+            format!("{second} {tail}")
+        };
+        (-1, b)
+    };
+
+    (interval_ms, count, body, world)
+}
+
+/// Parse an optional leading `/interval` prefix from `/quote` args.
+///
+/// TF syntax: `/quote [/seconds] 'file` or `/quote [/seconds] !cmd`
+///
+/// Returns `(interval_ms, remaining_str)`.  The default interval is 250 ms.
+fn parse_quote_interval(s: &str) -> (u64, &str) {
+    const DEFAULT_MS: u64 = 250;
+    if let Some(rest) = s.strip_prefix('/') {
+        let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+        let tok = &rest[..end];
+        if let Ok(n) = tok.parse::<f64>() {
+            let ms = (n * 1000.0).max(1.0) as u64;
+            return (ms, rest[end..].trim_start());
+        }
+        // '/' was not a numeric interval prefix; leave s untouched.
+    }
+    (DEFAULT_MS, s)
+}
+
 /// Tokenise an `/addworld` argument string (respects double-quoted tokens).
 fn tokenise_addworld(s: &str) -> Vec<String> {
     let mut tokens = Vec::new();
@@ -877,5 +1140,140 @@ mod tests {
     fn def_probability_flag() {
         let mac = parse_def("-P 75 foo = body");
         assert_eq!(mac.probability, 75);
+    }
+
+    // ── Phase 14: process scheduling, undef, unbind, logging ─────────────────
+
+    #[test]
+    fn repeat_queues_add_repeat() {
+        let mut interp = Interpreter::new();
+        interp.exec_script("/repeat 2 /echo hi").unwrap();
+        let actions = interp.take_actions();
+        assert!(matches!(
+            &actions[0],
+            ScriptAction::AddRepeat { interval_ms, count, body, world: None }
+            if *interval_ms == 2000 && *count == -1 && body == "/echo hi"
+        ));
+    }
+
+    #[test]
+    fn repeat_with_count_queues_correctly() {
+        let mut interp = Interpreter::new();
+        interp.exec_script("/repeat 1 5 hello").unwrap();
+        let actions = interp.take_actions();
+        assert!(matches!(
+            &actions[0],
+            ScriptAction::AddRepeat { interval_ms, count, body, world: None }
+            if *interval_ms == 1000 && *count == 5 && body == "hello"
+        ));
+    }
+
+    #[test]
+    fn quote_file_queues_add_quote_file() {
+        let mut interp = Interpreter::new();
+        interp.exec_script("/quote 'myfile.txt").unwrap();
+        let actions = interp.take_actions();
+        assert!(matches!(
+            &actions[0],
+            ScriptAction::AddQuoteFile { path, .. } if path == "myfile.txt"
+        ));
+    }
+
+    #[test]
+    fn quote_shell_queues_add_quote_shell() {
+        let mut interp = Interpreter::new();
+        interp.exec_script("/quote !ls").unwrap();
+        let actions = interp.take_actions();
+        assert!(matches!(
+            &actions[0],
+            ScriptAction::AddQuoteShell { command, .. } if command == "ls"
+        ));
+    }
+
+    #[test]
+    fn quote_with_interval_queues_with_ms() {
+        let mut interp = Interpreter::new();
+        interp.exec_script("/quote /0.5 'file.txt").unwrap();
+        let actions = interp.take_actions();
+        assert!(matches!(
+            &actions[0],
+            ScriptAction::AddQuoteFile { interval_ms, .. } if *interval_ms == 500
+        ));
+    }
+
+    #[test]
+    fn undef_queues_undef_macro() {
+        let mut interp = Interpreter::new();
+        interp.exec_script("/def foo = /echo hi").unwrap();
+        let _ = interp.take_actions();
+        interp.exec_script("/undef foo").unwrap();
+        let actions = interp.take_actions();
+        assert!(matches!(&actions[0], ScriptAction::UndefMacro(n) if n == "foo"));
+    }
+
+    #[test]
+    fn unbind_queues_unbind_key() {
+        let mut interp = Interpreter::new();
+        interp.exec_script("/unbind ^A").unwrap();
+        let actions = interp.take_actions();
+        assert!(matches!(&actions[0], ScriptAction::UnbindKey(s) if s == "^A"));
+    }
+
+    #[test]
+    fn log_queues_start_log() {
+        let mut interp = Interpreter::new();
+        interp.exec_script("/log /tmp/test.log").unwrap();
+        let actions = interp.take_actions();
+        assert!(matches!(&actions[0], ScriptAction::StartLog(p) if p == "/tmp/test.log"));
+    }
+
+    #[test]
+    fn nolog_queues_stop_log() {
+        let mut interp = Interpreter::new();
+        interp.exec_script("/nolog").unwrap();
+        let actions = interp.take_actions();
+        assert!(matches!(&actions[0], ScriptAction::StopLog));
+    }
+
+    #[test]
+    fn listworlds_queues_action() {
+        let mut interp = Interpreter::new();
+        interp.exec_script("/listworlds").unwrap();
+        let actions = interp.take_actions();
+        assert!(matches!(&actions[0], ScriptAction::ListWorlds));
+    }
+
+    #[test]
+    fn list_with_filter_queues_action() {
+        let mut interp = Interpreter::new();
+        interp.exec_script("/list foo").unwrap();
+        let actions = interp.take_actions();
+        assert!(matches!(
+            &actions[0],
+            ScriptAction::ListMacros { filter: Some(f) } if f == "foo"
+        ));
+    }
+
+    #[test]
+    fn parse_repeat_args_fraction_seconds() {
+        let (ms, count, body, world) = parse_repeat_args("0.5 walk");
+        assert_eq!(ms, 500);
+        assert_eq!(count, -1);
+        assert_eq!(body, "walk");
+        assert!(world.is_none());
+    }
+
+    #[test]
+    fn parse_quote_interval_default() {
+        let (ms, rest) = parse_quote_interval("'file.txt");
+        assert_eq!(ms, 250);
+        assert_eq!(rest, "'file.txt");
+    }
+
+    #[test]
+    fn parse_quote_interval_explicit() {
+        let (ms, rest) = parse_quote_interval("/1 'file.txt");
+        assert_eq!(ms, 1000);
+        assert_eq!(rest, "'file.txt");
     }
 }

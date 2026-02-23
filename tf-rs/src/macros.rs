@@ -245,6 +245,11 @@ impl MacroStore {
         self.macros.is_empty()
     }
 
+    /// Iterate over all macros (unordered).
+    pub fn iter(&self) -> impl Iterator<Item = &Macro> {
+        self.macros.values()
+    }
+
     // ── Trigger matching ──────────────────────────────────────────────────────
 
     /// Find all macros that trigger on `text` from `world`, return the
