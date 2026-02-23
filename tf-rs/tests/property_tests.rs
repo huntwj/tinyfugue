@@ -97,3 +97,26 @@ proptest! {
         }
     }
 }
+
+#[test]
+fn exec_stdlib() {
+    use tf::script::interp::Interpreter;
+    use tf::script::value::Value;
+    use std::path::Path;
+    use std::sync::Arc;
+
+    let stdlib = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().join("lib/tf/stdlib.tf");
+    let src = std::fs::read_to_string(&stdlib).unwrap();
+    let mut interp = Interpreter::new();
+    interp.set_global_var("TFLIBDIR", Value::Str(stdlib.parent().unwrap().display().to_string()));
+    interp.set_global_var("TFLIBRARY", Value::Str(stdlib.display().to_string()));
+    let loader = Arc::new(|path: &str| {
+        std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))
+    });
+    interp.file_loader = Some(loader);
+    match interp.exec_script(&src) {
+        Ok(_) => {}
+        Err(e) => panic!("stdlib.tf exec error: {e}"),
+    }
+}
+

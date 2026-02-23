@@ -71,8 +71,10 @@ pub enum Token {
     Le,
     Gt,
     Ge,
-    GlobMatch,  // =~
-    RegexMatch, // =/
+    GlobMatch,    // =~
+    RegexMatch,   // =/
+    NotGlobMatch,  // !~
+    NotRegexMatch, // !/
 
     // Logical
     And, // &&
@@ -264,6 +266,10 @@ impl<'a> Lexer<'a> {
             b'!' => {
                 if self.eat(b'=') {
                     Token::Ne
+                } else if self.eat(b'~') {
+                    Token::NotGlobMatch
+                } else if self.eat(b'/') {
+                    Token::NotRegexMatch
                 } else {
                     Token::Bang
                 }
@@ -360,6 +366,8 @@ pub enum BinOp {
     Shr,
     GlobMatch,
     RegexMatch,
+    NotGlobMatch,
+    NotRegexMatch,
 }
 
 #[derive(Debug, Clone)]
@@ -510,6 +518,8 @@ impl Parser {
                 Token::Ge => BinOp::Ge,
                 Token::GlobMatch => BinOp::GlobMatch,
                 Token::RegexMatch => BinOp::RegexMatch,
+                Token::NotGlobMatch => BinOp::NotGlobMatch,
+                Token::NotRegexMatch => BinOp::NotRegexMatch,
                 _ => break,
             };
             self.pos += 1;
@@ -800,10 +810,19 @@ fn eval_binop(op: &BinOp, l: Value, r: Value, _ctx: &mut dyn EvalContext) -> Res
             Ok(Value::Int(if glob_match(&pattern, &text) { 1 } else { 0 }))
         }
         BinOp::RegexMatch => {
-            // Use the pattern module's regex support if available; fall back to literal match.
             let text = l.as_str();
             let pattern = r.as_str();
             Ok(Value::Int(if regex_match(&pattern, &text) { 1 } else { 0 }))
+        }
+        BinOp::NotGlobMatch => {
+            let text = l.as_str();
+            let pattern = r.as_str();
+            Ok(Value::Int(if glob_match(&pattern, &text) { 0 } else { 1 }))
+        }
+        BinOp::NotRegexMatch => {
+            let text = l.as_str();
+            let pattern = r.as_str();
+            Ok(Value::Int(if regex_match(&pattern, &text) { 0 } else { 1 }))
         }
 
         BinOp::And | BinOp::Or => unreachable!("handled above"),
@@ -987,6 +1006,19 @@ mod tests {
         assert_eq!(eval("\"hello\" =~ \"hel*\""), Value::Int(1));
         assert_eq!(eval("\"hello\" =~ \"xyz*\""), Value::Int(0));
         assert_eq!(eval("\"hello\" =~ \"h?llo\""), Value::Int(1));
+    }
+
+    #[test]
+    fn not_glob_match_op() {
+        assert_eq!(eval("\"hello\" !~ \"hel*\""), Value::Int(0));
+        assert_eq!(eval("\"hello\" !~ \"xyz*\""), Value::Int(1));
+    }
+
+    #[test]
+    fn not_regex_match_op() {
+        // regex_match uses substring match as a fallback.
+        assert_eq!(eval("\"hello world\" !/ \"world\""), Value::Int(0));
+        assert_eq!(eval("\"hello\" !/ \"xyz\""), Value::Int(1));
     }
 
     #[test]

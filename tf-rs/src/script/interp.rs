@@ -276,7 +276,7 @@ impl Interpreter {
 
             Stmt::If { cond, then_block, else_block } => {
                 let expanded = expand(cond, self)?;
-                let val = eval_str(&expanded, self)?;
+                let val = self.eval_condition(&expanded)?;
                 let block = if val.as_bool() { then_block } else { else_block };
                 self.exec_block(block)
             }
@@ -284,7 +284,7 @@ impl Interpreter {
             Stmt::While { cond, body } => {
                 loop {
                     let expanded = expand(cond, self)?;
-                    let val = eval_str(&expanded, self)?;
+                    let val = self.eval_condition(&expanded)?;
                     if !val.as_bool() {
                         break;
                     }
@@ -344,9 +344,31 @@ impl Interpreter {
         }
     }
 
+    // ── Condition evaluation ───────────────────────────────────────────────────
+
+    /// Evaluate a condition string: if it starts with `/`, run it as a command
+    /// and use the return value; otherwise evaluate it as an expression.
+    fn eval_condition(&mut self, expanded: &str) -> Result<Value, String> {
+        let trimmed = expanded.trim();
+        if trimmed.starts_with('/') {
+            let stmts = parse_script(trimmed)
+                .map_err(|e| format!("condition parse error: {e}"))?;
+            match self.exec_block(&stmts)? {
+                Some(ControlFlow::Return(v)) => Ok(v),
+                _ => Ok(Value::Int(0)),
+            }
+        } else {
+            eval_str(trimmed, self)
+        }
+    }
+
     // ── Built-in command dispatch ──────────────────────────────────────────────
 
     fn exec_builtin(&mut self, name: &str, args: &str) -> Result<Option<ControlFlow>, String> {
+        // Strip the TF `@` prefix used for expression-returning commands like
+        // `/@test`, `/@eval`, `/@list`.  The `@` is a capture hint for the C
+        // interpreter; we simply treat them as their base command.
+        let name = name.strip_prefix('@').unwrap_or(name);
         match name {
             // ── Lifecycle ──────────────────────────────────────────────────────
             "quit" | "exit" => {
@@ -370,21 +392,50 @@ impl Interpreter {
             // ── File loading ───────────────────────────────────────────────────
             "load" => {
                 // /load [-q] [-L <dir>] <file>
-                let (quiet, path_expr) = parse_load_flags(args);
-                let path = expand(path_expr, self)?;
-                let path = path.trim().to_owned();
+                // Expand args FIRST (e.g. %{-L} %{L} in the `require` macro),
+                // THEN parse flags so that -q/-L embedded via expansion are seen.
+                let expanded = expand(args, self)?;
+                let (quiet, raw_path) = parse_load_flags(&expanded);
+                let raw_path = raw_path.trim().to_owned();
+
                 let loader = self.file_loader.clone();
                 if let Some(loader) = loader {
-                    match loader(&path) {
-                        Ok(src) => {
-                            let stmts = parse_script(&src)
-                                .map_err(|e| format!("{path}: parse error: {e}"))?;
-                            self.exec_block(&stmts)?;
+                    // For bare filenames (no leading /, ./, ~/) try TFLIBDIR first,
+                    // then fall back to the literal path — mirrors C TF behaviour.
+                    let is_relative = !raw_path.is_empty()
+                        && !raw_path.starts_with('/')
+                        && !raw_path.starts_with('.')
+                        && !raw_path.starts_with('~');
+
+                    let paths: Vec<String> = if is_relative {
+                        let mut v = Vec::new();
+                        if let Some(libdir) =
+                            self.get_var("TFLIBDIR").map(|v| v.to_string())
+                        {
+                            v.push(format!("{libdir}/{raw_path}"));
                         }
-                        Err(e) if !quiet => {
-                            self.output.push(format!("% {e}"));
+                        v.push(raw_path.clone());
+                        v
+                    } else {
+                        vec![raw_path.clone()]
+                    };
+
+                    let mut loaded = false;
+                    let mut last_err = String::new();
+                    for path in &paths {
+                        match loader(path) {
+                            Ok(src) => {
+                                let stmts = parse_script(&src)
+                                    .map_err(|e| format!("{path}: parse error: {e}"))?;
+                                self.exec_block(&stmts)?;
+                                loaded = true;
+                                break;
+                            }
+                            Err(e) => last_err = e,
                         }
-                        Err(_) => {} // quiet mode — suppress "not found"
+                    }
+                    if !loaded && !quiet {
+                        self.output.push(format!("% {last_err}"));
                     }
                 }
                 Ok(None)
@@ -545,6 +596,28 @@ impl Interpreter {
                 Ok(None)
             }
 
+            // ── Expression / condition evaluation ─────────────────────────────
+            // /test expr — evaluate expr and return its boolean value.
+            // Used by /@test in /if conditions.
+            "test" | "result" => {
+                let expanded = expand(args, self)?;
+                let val = eval_str(&expanded, self)?;
+                Ok(Some(ControlFlow::Return(val)))
+            }
+
+            // /then body — execute body as a TF command.
+            // Used in old-style TF "if cond%; /then body" patterns.
+            "then" => {
+                let expanded = expand(args, self)?;
+                let body = expanded.trim();
+                if body.is_empty() {
+                    return Ok(None);
+                }
+                let stmts = parse_script(body)
+                    .map_err(|e| format!("/then: parse error: {e}"))?;
+                self.exec_block(&stmts)
+            }
+
             // ── Lua scripting ──────────────────────────────────────────────────
             #[cfg(feature = "lua")]
             "loadlua" => {
@@ -671,7 +744,8 @@ impl EvalContext for Interpreter {
             self.invoke_macro(&body, name, params)?;
             return Ok(Value::default());
         }
-        Err(format!("unknown function: {name}"))
+        // Unknown functions return empty string, matching TF's C behaviour.
+        Ok(Value::default())
     }
 
     fn eval_expr_str(&mut self, s: &str) -> Result<Value, String> {

@@ -61,7 +61,7 @@ pub fn parse_script(src: &str) -> Result<Vec<Stmt>, String> {
         .iter()
         .flat_map(|l| split_by_separator(l))
         .map(|s| s.trim().to_owned())
-        .filter(|s| !s.is_empty() && !s.starts_with('#'))
+        .filter(|s| !s.is_empty() && !s.starts_with('#') && !s.starts_with(';'))
         .collect();
 
     let mut parser = StmtParser {
@@ -74,10 +74,17 @@ pub fn parse_script(src: &str) -> Result<Vec<Stmt>, String> {
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
 /// Join lines that end with `\` into single logical lines.
+///
+/// TF `;`-comment lines (starting with `;`) are skipped without terminating
+/// a continuation sequence — they behave like blank lines.
 fn join_continuations(src: &str) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
     let mut current = String::new();
     for line in src.lines() {
+        // Skip TF semicolon-comment lines without breaking continuation.
+        if line.trim_start().starts_with(';') {
+            continue;
+        }
         if let Some(stripped) = line.strip_suffix('\\') {
             current.push_str(stripped);
         } else {
@@ -92,7 +99,20 @@ fn join_continuations(src: &str) -> Vec<String> {
 }
 
 /// Split a logical line on `%;` (but not inside strings).
+///
+/// Body commands (`/def`, `/trigger`, `/hook`, `/alias`, `/bind`) use `=` to
+/// separate the macro name from its body.  The body itself may contain `%;`
+/// as intra-body statement separators, which must **not** be treated as outer
+/// statement separators.  These commands are therefore returned as a single
+/// unsplit element.
 fn split_by_separator(line: &str) -> Vec<String> {
+    // If the line is a body command, return it whole — the %; inside the body
+    // are intra-body separators, not outer ones.
+    if is_body_cmd(line) {
+        let trimmed = line.trim().to_owned();
+        return if trimmed.is_empty() { vec![] } else { vec![trimmed] };
+    }
+
     let mut parts = Vec::new();
     let mut current = String::new();
     let mut in_str = false;
@@ -125,6 +145,17 @@ fn split_by_separator(line: &str) -> Vec<String> {
         parts.push(current);
     }
     parts
+}
+
+/// Returns `true` if the logical line is a command whose body (after `=`) must
+/// not be split on `%;`.  These are macro-defining commands.
+fn is_body_cmd(line: &str) -> bool {
+    let s = line.trim_start();
+    if !s.starts_with('/') {
+        return false;
+    }
+    let name = s[1..].split_whitespace().next().unwrap_or("");
+    matches!(name, "def" | "trigger" | "hook" | "alias" | "bind")
 }
 
 // ── Statement-level parser ────────────────────────────────────────────────────
@@ -231,11 +262,25 @@ impl StmtParser {
     }
 
     fn parse_if(&mut self, rest: &str) -> Result<Stmt, String> {
-        let cond = strip_parens(rest.trim()).to_owned();
+        // Extract condition and optional inline body.
+        // E.g. "(_required)         /exit" → cond="_required", body="/exit"
+        //      "(x > 0)"                  → cond="x > 0",      body=""
+        //      "/@test ..."               → cond="/@test ...",  body=""
+        let (cond_str, inline_body) = extract_cond_and_body(rest.trim());
+        let cond = cond_str.to_owned();
 
-        let then_block = self.parse_block_until(Some(&["else", "endif"]))?;
+        // If there's an inline body it forms the start of the then_block.
+        let mut then_block = if !inline_body.is_empty() {
+            parse_script(inline_body)?
+        } else {
+            Vec::new()
+        };
 
-        // Consume /else or /endif; treat EOF as implicit /endif.
+        // Read further block statements until else / elseif / endif.
+        let more = self.parse_block_until(Some(&["else", "elseif", "endif"]))?;
+        then_block.extend(more);
+
+        // Consume /else, /elseif, or /endif; treat EOF as implicit /endif.
         let terminator = self.advance();
         let tc = terminator.as_deref().map(cmd_name).unwrap_or("endif");
 
@@ -243,6 +288,11 @@ impl StmtParser {
             let blk = self.parse_block_until(Some(&["endif"]))?;
             self.advance(); // consume /endif (or ignore None at EOF)
             blk
+        } else if tc == "elseif" {
+            // Treat /elseif as a nested /if in the else branch.
+            let term_line = terminator.as_deref().unwrap_or("");
+            let (_, elseif_rest) = split_cmd(term_line);
+            vec![self.parse_if(elseif_rest)?]
         } else {
             Vec::new() // was /endif or EOF
         };
@@ -304,6 +354,40 @@ fn strip_parens(s: &str) -> &str {
     } else {
         s
     }
+}
+
+/// Split a `/if` or `/elseif` argument into `(condition, inline_body)`.
+///
+/// If `s` starts with `(`, the condition is the text inside the first matching
+/// pair of parentheses; anything after the closing `)` (trimmed) is the inline
+/// body.  Otherwise the entire `s` is the condition and the body is empty.
+///
+/// Examples:
+/// - `"(x > 0)"` → `("x > 0", "")`
+/// - `"(x > 0) /echo hi"` → `("x > 0", "/echo hi")`
+/// - `"/@test foo !/ bar"` → `("/@test foo !/ bar", "")`
+fn extract_cond_and_body(s: &str) -> (&str, &str) {
+    if !s.starts_with('(') {
+        return (s, "");
+    }
+    // Find the matching close paren (depth-counting for nested parens).
+    let mut depth = 0i32;
+    for (i, c) in s.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    let cond = &s[1..i];
+                    let body = s[i + 1..].trim_start();
+                    return (cond, body);
+                }
+            }
+            _ => {}
+        }
+    }
+    // No matching close paren — treat whole string as condition.
+    (s, "")
 }
 
 /// Split off the first whitespace-delimited word from `s`.
@@ -520,6 +604,62 @@ mod tests {
             assert!(matches!(&body[0], Stmt::For { .. }));
         } else {
             panic!("expected outer For");
+        }
+    }
+
+    #[test]
+    fn semicolon_comment_skipped() {
+        // TF ';' comments are skipped like '#' comments.
+        let stmts = parse("; this is a tf comment\n/echo hi");
+        assert_eq!(stmts.len(), 1);
+    }
+
+    #[test]
+    fn semicolon_comment_preserves_continuation() {
+        // A ';' comment in the middle of a continuation should NOT break it.
+        let src = "/def foo = \\\n; comment here\n/echo body";
+        let stmts = parse(src);
+        // The /def should absorb the continuation including the echo.
+        assert_eq!(stmts.len(), 1);
+        assert!(matches!(&stmts[0], Stmt::Command { name, .. } if name == "def"));
+    }
+
+    #[test]
+    fn def_body_not_split() {
+        // /def body containing %; must not be split into multiple statements.
+        let src = "/def foo = /echo one%; /echo two";
+        let stmts = parse(src);
+        assert_eq!(stmts.len(), 1, "def body should not be split on %;");
+        assert!(matches!(&stmts[0], Stmt::Command { name, .. } if name == "def"));
+    }
+
+    #[test]
+    fn if_elseif_endif() {
+        let src = "/if (x > 0)\n/echo pos\n/elseif (x < 0)\n/echo neg\n/endif";
+        let stmts = parse(src);
+        assert_eq!(stmts.len(), 1);
+        if let Stmt::If { cond, then_block, else_block } = &stmts[0] {
+            assert_eq!(cond, "x > 0");
+            assert_eq!(then_block.len(), 1);
+            // else_block should contain a nested If for the elseif
+            assert_eq!(else_block.len(), 1);
+            assert!(matches!(&else_block[0], Stmt::If { .. }));
+        } else {
+            panic!("expected If");
+        }
+    }
+
+    #[test]
+    fn if_with_inline_body() {
+        // /if (cond) stmt — inline body form
+        let src = "/if (x > 0) /echo pos%; /endif";
+        let stmts = parse(src);
+        assert_eq!(stmts.len(), 1);
+        if let Stmt::If { cond, then_block, .. } = &stmts[0] {
+            assert_eq!(cond, "x > 0");
+            assert!(!then_block.is_empty());
+        } else {
+            panic!("expected If");
         }
     }
 }
