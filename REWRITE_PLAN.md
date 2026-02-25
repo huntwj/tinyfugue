@@ -256,7 +256,7 @@ These features are recognized as missing but not yet scheduled:
 - `/setenv name=value` — ✓ calls `std::env::set_var`
 
 ### Display
-- `@{Cbgrgb500}` and other TF attribute escape sequences in output text are not yet rendered to terminal colors — they pass through as literal text
+- `@{...}` TF attribute sequences — ✓ `TfStr::from_tf_markup()` parses all spec codes (bold, underline, italic, reverse, named colors, `rgbXYZ` mapped to nearest 16-color) and strips them from visible text; script/macro output now renders colors correctly
 - Status line supports only `(world) time`; custom field format strings are parsed but not evaluated
 
 ### Networking
