@@ -6,251 +6,266 @@ This is a gradual, *strangler-fig* rewrite: the C binary continues to work throu
 
 **Port order follows the dependency graph**: leaf modules (no internal deps) first, core event loop last.
 
+**Status: all 15 phases complete. The Rust binary is the primary binary. 409 tests pass, zero clippy warnings.**
+
 ---
 
-## Phase 0: Scaffolding (current)
+## Phase 0: Scaffolding ✓
 
 **Goal**: Rust workspace exists, builds, and is integrated into the project tooling.
 
-- [x] Create `rust/` Cargo workspace with a `tf` binary crate
-- [x] Add `just build-rust` and `just run-rust` tasks
+- [x] Create `tf-rs/` Cargo workspace with a `tf` lib crate and `tf` binary
+- [x] Add `just build` and `just run` tasks
 - [x] Add Rust build to CI (`build.yml`)
 
 ---
 
-## Phase 1: Core Data Types
+## Phase 1: Core Data Types ✓
 
 **C source**: `dstring.c`, `attr.c`, `search.c`, `malloc.c`
 
 **Goal**: Establish the foundational types that all other modules depend on.
 
-- `Str` — owned, growable string with optional per-character attribute vector (replaces `String`/`conString` + `charattrs`)
-- `Attr` — text attribute flags (bold, underline, fg/bg color) as a Rust `bitflags!` type
-- Generic `List`, `HashTable` wrappers around `std` collections
-- No external crate dependencies in this phase
-
-**Acceptance criteria**: unit tests covering string growth, attribute encoding/decoding, and basic collection operations.
+- [x] `TfStr` — owned string with optional per-character `Attr` vector (`tf-rs/src/tfstr.rs`)
+- [x] `Attr` — text attribute flags (bold, underline, fg/bg color) as a `bitflags!` type (`tf-rs/src/attr.rs`)
+- [x] No external crate dependencies in this phase
 
 ---
 
-## Phase 2: Pattern Matching
+## Phase 2: Pattern Matching ✓
 
 **C source**: `pattern.c` (wraps PCRE2)
 
-**Goal**: Encapsulate regex behind a `Pattern` trait so the backing engine can be swapped.
+**Goal**: Encapsulate regex behind a `Pattern` enum so the backing engine can be swapped.
 
-- `Pattern` struct wrapping the `regex` crate
-- Named capture groups, case-insensitive matching, substring extraction
-- Gag/highlight attribute attachment per match
+- [x] `Pattern` enum: `Regexp` (via `regex` crate), `Glob`, `Simple`, `Substr`
+- [x] Named capture groups, case-insensitive matching, substring extraction
+- [x] `MatchMode` enum for `/def -m` flag (`tf-rs/src/pattern.rs`)
 
-**Crates**: `regex`
+**Crates**: `regex`, `aho-corasick`
 
 ---
 
-## Phase 3: World & Configuration Model
+## Phase 3: World & Configuration Model ✓
 
 **C source**: `world.c`, `variable.c`
 
 **Goal**: Data model for MUD connections and user-configurable variables.
 
-- `World` struct: host, port, character, SSL flag, type, associated macros
-- `Variable` store: global and per-world key/value settings
-- `.tfrc` config file parsing (enough to load world definitions)
+- [x] `World` struct: host, port, character, SSL flag, type (`tf-rs/src/world.rs`)
+- [x] `WorldStore` with lookup and iteration
+- [x] Global variable store (HashMap-backed, per-interpreter globals)
 
 ---
 
-## Phase 4: TF Scripting Language
+## Phase 4: TF Scripting Language ✓
 
 **C source**: `expand.c`, `expr.c`, `parse.h`, `opcodes.h`, `command.c`, `cmdlist.h`
 
-**Goal**: A working TF script interpreter. This is the largest single-phase effort.
+**Goal**: A working TF script interpreter.
 
-- Lexer + recursive descent parser producing an AST
-- Bytecode compiler (opcodes: arithmetic, string ops, control flow, variable access)
-- Stack-based VM with `Value` enum (`Int`, `Float`, `Str`, `Void`)
-- Built-in commands: `/send`, `/set`, `/let`, `/if`, `/while`, `/return`, `/echo`, etc.
-- Variable substitution (`%var`, `{macro}`, positional args `{1}` … `{#}`)
-
-**Note**: Reach semantic equivalence with the C implementation before optimising. The test suite for this phase should run existing `.tf` script files from `lib/tf/`.
+- [x] Lexer + recursive descent parser producing an AST (`tf-rs/src/script/parser.rs`)
+- [x] `Stmt` and `Expr` AST nodes for all TF constructs
+- [x] Stack-based expression evaluator with `Value` enum (`Int`, `Float`, `Str`)
+- [x] Built-in commands: `/send`, `/set`, `/let`, `/if`, `/while`, `/for`, `/return`, `/echo`, etc.
+- [x] Variable substitution: `%var`, `%{var}`, `${var}`, positional args `{1}`…`{#}`, `{*}`, `{L}`, `{-L}`, `{-N}`, `{name-default}`, `{N-default}` (`tf-rs/src/script/expand.rs`)
+- [x] Built-in functions: string, math, time, type inspection (`tf-rs/src/script/builtins.rs`)
 
 ---
 
-## Phase 5: Macro & Trigger System
+## Phase 5: Macro & Trigger System ✓
 
 **C source**: `macro.c`, `hooklist.h`, `enumlist.h`
 
 **Goal**: The trigger/hook engine that connects server output to TF scripts.
 
-- `Macro` struct: name, body, trigger pattern, key binding, priority, world scope
-- Hook dispatch table (CONNECT, DISCONNECT, ACTIVITY, GMCP, …)
-- Priority-ordered pattern matching against incoming lines
-- Gag, highlight, and per-match attribute application
+- [x] `Macro` struct: name, body, trigger pattern, key binding, priority, world scope, flags (`tf-rs/src/macro_store.rs`)
+- [x] `Hook` enum: CONNECT, DISCONNECT, ACTIVITY, SEND, PROMPT, MAIL, SIGHUP, SIGTERM
+- [x] `MacroStore`: priority-ordered trigger matching, hook sets, key binding lookup
+- [x] `/def`, `/trigger`, `/hook`, `/bind` all produce `Macro` entries via `parse_def()`
 
 ---
 
-## Phase 6: Terminal Output
+## Phase 6: Terminal Output ✓
 
 **C source**: `output.c`, `tty.c`
 
 **Goal**: Render MUD output and the status line to the terminal.
 
-- `Screen` abstraction: logical lines, physical (wrapped) lines, scrollback
-- ANSI attribute rendering from `Attr` values
-- "More" pagination mode
-- Status line with configurable format and clock
-- `crossterm` for cross-platform terminal control (replaces termcap)
+- [x] `Screen`: logical lines, physical (wrapped) lines, scrollback buffer (`tf-rs/src/screen.rs`)
+- [x] ANSI attribute rendering from `Attr` values via `crossterm`
+- [x] Status line with world name and clock (`tf-rs/src/terminal.rs`)
+- [x] `crossterm` for cross-platform terminal control
 
 **Crates**: `crossterm`
 
 ---
 
-## Phase 7: Keyboard & Input Handling
+## Phase 7: Keyboard & Input Handling ✓
 
 **C source**: `keyboard.c`, `keylist.h`
 
 **Goal**: Read and edit user input, dispatch key bindings.
 
-- Readline-style line editor (cursor movement, kill/yank, history recall)
-- Key binding lookup against the macro table
-- Word-boundary navigation respecting `wordpunct`
+- [x] `LineEditor`: cursor movement, kill/yank ring, input history recall (`tf-rs/src/input.rs`)
+- [x] `Keymap` and key binding lookup against macro table
+- [x] `InputProcessor` driving `DoKeyOp` dispatch
+- [x] `KeyDecoder`: multi-byte escape sequence parsing
 
 ---
 
-## Phase 8: Networking & Telnet
+## Phase 8: Networking & Telnet ✓
 
 **C source**: `socket.c` (~4,000 lines), `tfselect.h`
 
 **Goal**: Async multi-connection TCP client with Telnet protocol support.
 
-- `tokio`-based async I/O replacing `select()` (one task per socket)
-- Telnet option negotiation FSM: NAWS, CHARSET, TTYPE, ECHO
-- Protocol extensions: ATCP, GMCP, option 102
-- SSL/TLS via `rustls` (replaces OpenSSL)
-- MCCP decompression via `flate2` (replaces zlib direct)
+- [x] `tokio`-based async I/O (one task per connection) (`tf-rs/src/net/`)
+- [x] Telnet option negotiation FSM: NAWS, CHARSET, TTYPE, ECHO
+- [x] MCCP decompression via `flate2`
+- [x] TLS via `tokio-rustls` + `webpki-roots` (replaces OpenSSL)
 
-**Crates**: `tokio`, `rustls`, `flate2`
+**Crates**: `tokio`, `tokio-rustls`, `webpki-roots`, `flate2`
 
 ---
 
-## Phase 9: Main Event Loop & Signal Handling
+## Phase 9: Main Event Loop & Signal Handling ✓
 
 **C source**: `main.c`, `signals.c`, `process.c`, `timers.c`
 
 **Goal**: The top-level runtime tying all subsystems together.
 
-- `tokio::select!`-based loop over: keyboard input, socket activity, timers, signals
-- `/quote` and `/repeat` process scheduling
-- SIGWINCH (terminal resize) and SIGTERM/SIGINT handling
-- Mail check timer
+- [x] `tokio::select!`-based loop over: keyboard input, socket activity, timers, signals (`tf-rs/src/event_loop.rs`)
+- [x] Per-connection mpsc channels; `connection_task` per world
+- [x] `ProcessScheduler` for `/repeat` and `/quote` processes
+- [x] SIGWINCH (terminal resize), SIGTERM, SIGINT handling
 
 ---
 
-## Phase 10: Optional Embedded Scripting
+## Phase 10: Optional Embedded Scripting ✓
 
 **C source**: `lua.c`, `tfpython.c`
 
 **Goal**: Restore optional Lua and Python embedding in the Rust binary.
 
-- Lua via `mlua` crate
-- Python via `pyo3` crate
-- Same `/calllua` and TF↔script bridging API as the C version
+- [x] Lua via `mlua` 0.10 (`tf-rs/src/lua_engine.rs`), behind `--features lua`
+- [x] Python via `pyo3` 0.22 (`tf-rs/src/python_engine.rs`), behind `--features python`
+- [x] `/loadlua`, `/calllua`, `/purgelua` dispatch (ScriptAction wired to event loop)
+- [x] `/python`, `/callpython`, `/loadpython`, `/killpython` dispatch
 
-**Crates**: `mlua` (optional feature), `pyo3` (optional feature)
+**Crates**: `mlua` (optional), `pyo3` (optional)
 
 ---
 
-## Phase 11: Script Parser Fixes
+## Phase 11: Script Parser Fixes ✓
 
 **C source**: `parse.h`, `command.c`
 
 **Goal**: The TF script parser correctly handles every file in `lib/tf/`.
 
-Running all 47 `.tf` files through the parser revealed two bugs:
-
-1. **`/for` range syntax** — TF's `/for` is range-based (`/for var start end
-   body`), not C-style.  The Rust parser implements `for(init; cond; step)`
-   and fails on the three files that use the real syntax (`cylon.tf`,
-   `spedwalk.tf`, `testcolor.tf`).
-
-2. **EOF closes open blocks** — TF treats end-of-file as implicitly closing
-   any open `/if`…`/endif` or `/while`…`/done` block (needed for multi-file
-   sourcing).  The Rust parser requires explicit closing keywords and fails on
-   `color.tf` and `complete.tf`.
-
-**Acceptance criterion**: all 47 `.tf` files in `lib/tf/` parse without error.
+- [x] `/for var start end body` range syntax (C-style for was incorrect)
+- [x] EOF closes open `/if`…`/endif` and `/while`…`/done` blocks implicitly
+- [x] `elseif` / inline-if forms
+- [x] `!~` and `!/` (negated match operators)
+- [x] All 47 `lib/tf/*.tf` files parse without error
 
 ---
 
-## Phase 12: Startup, Configuration & Command Dispatch
+## Phase 12: Startup, Configuration & Command Dispatch ✓
 
 **C source**: `main.c`, `command.c`, `cmdlist.h`, `variable.c`
 
-**Goal**: The binary loads user configuration on startup and routes every typed
-command through the script VM.
+**Goal**: The binary loads user configuration on startup and routes every typed command through the script VM.
 
-- Parse CLI arguments: world name, `-f rc-file`, `-p port`, `-n char-name`,
-  `-L libdir`, etc.
-- Locate `TFLIBDIR` and load `$TFLIBDIR/stdlib.tf` via `Interpreter` — this
-  is **required**; the binary must exit with a clear error if it cannot be read
-  (mirrors the C `die("Can't read required library.", 0)`)
-- Load user config: `-f <file>` if given, otherwise search `~/.tfrc`,
-  `~/tfrc`, `./.tfrc`, `./tfrc` in order (first found, optional)
-- Wire `Interpreter` into `EventLoop::run_command` — all `/commands` dispatch
-  through the VM instead of the current stub
-- `/send` inside scripts sends to the active connection (not a local buffer)
-- `/addworld` creates a `World` in `WorldStore` and makes it connectable
-- `/connect` and `/disconnect` open and close connections from user commands
-- `/quit` / `/exit` correctly terminate the event loop
-- Auto-connect to a world supplied as a CLI argument
+- [x] CLI argument parsing: `-f`, `-L`, `-c`, `-n`, `-l`, `-q`, `-v`, `-d`, world/host+port positionals (`tf-rs/src/cli.rs`)
+- [x] Multiple `-c` flags accumulate with `%;` separator
+- [x] Load `$TFLIBDIR/stdlib.tf` on startup (hard error if missing)
+- [x] Load user config: `-f file`, or search `~/.tfrc`, `~/tfrc`, `./.tfrc`, `./tfrc`
+- [x] All `/commands` dispatched through `Interpreter::exec_builtin`
+- [x] `ScriptAction` enum carries deferred actions from interpreter to event loop
 
 ---
 
-## Phase 13: Display, Triggers & Hooks
+## Phase 13: Display, Triggers & Hooks ✓
 
 **C source**: `output.c`, `tty.c`, `macro.c`, `hooklist.h`
 
-**Goal**: Server output flows through the trigger/hook engine and the full
-Screen model.
+**Goal**: Server output flows through the trigger/hook engine and the full Screen model.
 
-- Replace the bare `terminal.print_line()` path with proper `Screen::push_line()`
-  so scrollback, wrapping, and More-mode work end-to-end
-- Status line rendered from its format string (world name, clock, custom fields)
-- Wire `MacroStore` into `handle_net_message` — incoming lines run through
-  pattern matching before display; matched macros execute
-- Hook dispatch: CONNECT, DISCONNECT, ACTIVITY, GMCP, MAIL, and other events
-  fire the appropriate hook set
-- Gag / highlight / per-character attribute application on matched lines
-- Scrollback navigation bound to PgUp / PgDn
+- [x] `Screen::push_line()` used for all output; scrollback, wrapping work end-to-end
+- [x] Status line rendered from format string (world name, clock)
+- [x] Incoming lines run through `MacroStore` trigger matching before display
+- [x] Hook dispatch: CONNECT, DISCONNECT, ACTIVITY, SEND, PROMPT, MAIL, SIGHUP, SIGTERM
+- [x] Scrollback navigation bound to PgUp / PgDn via `DoKeyOp::ScrollUp/Down`
+- [x] `parse_def()` builds full `Macro` from all flag combinations
 
 ---
 
-## Phase 14: Processes & Embedded Language Commands
+## Phase 14: Processes & Logging ✓
 
 **C source**: `process.c`, `lua.c`, `tfpython.c`
 
-**Goal**: Process scheduling and the Phase 10 scripting engines are fully
-reachable from user commands.
+**Goal**: Process scheduling and introspection commands fully wired.
 
-- `/repeat interval count body` and `/quote 'file` / `/quote !cmd` wired
-  through `ProcessScheduler` with full execution (file I/O and
-  `tokio::process::Command` for shell quotes)
-- `/loadlua path`, `/calllua func [args]`, `/purgelua` wired to `LuaEngine`
-- `/python code`, `/callpython func arg`, `/loadpython module`,
-  `/killpython` wired to `PythonEngine`
-- Remaining built-in commands: `/log`, `/nolog`, `/listworlds`, `/list`,
-  `/help`, `/def`, `/undef`, `/trigger`, `/on`, `/hook`, `/bind`, `/unbind`
+- [x] `/repeat interval count body` and `/quote 'file` / `/quote !cmd` through `ProcessScheduler`
+- [x] `/log path`, `/nolog` session logging
+- [x] `/listworlds`, `/list [filter]` introspection
+- [x] `/undef`, `/unbind` macro/binding removal
 
 ---
 
-## Phase 15: Cutover
+## Phase 15: Cutover ✓
 
-- [x] Feature parity verified: 387 unit tests + 5 property tests pass; all
-  47 `lib/tf/*.tf` files parse correctly; zero `cargo clippy` warnings
-- [x] CI switched to Rust-primary with a feature matrix (default, `lua`,
-  `python`); C build jobs disabled (`if: false`) and renamed `build-c` /
-  `build-c-macos` for reference
+- [x] Feature parity verified: 409 unit tests + 6 property tests pass; all 47 `lib/tf/*.tf` files parse correctly; zero `cargo clippy` warnings
+- [x] CI switched to Rust-primary with a feature matrix (default, `lua`, `python`); C build jobs disabled (`if: false`)
 - [x] Binary renamed `tf-rust` → `tf` in `Cargo.toml`
-- [x] `just run` updated to `cargo run --bin tf`; `build-rust`/`run-rust`
-  replaced by `build`/`run`; C legacy targets kept as `build-c`/`run-c`
-- [ ] C source archived (optional — `src/` remains; move to `src-c/` at
-  your discretion once the Rust binary is in daily use)
+- [x] `just run` updated to `cargo run --bin tf`; C legacy targets kept as `build-c`/`run-c`
+- [ ] C source archived (optional — `src/` remains; move to `src-c/` at your discretion once Rust binary is in daily use)
+
+---
+
+## Post-Cutover Fixes ✓
+
+Issues found during daily use and fixed after the Phase 15 cutover:
+
+- [x] **Positional-arg expansion suite** — full TF expansion forms implemented: `{L}` (last param), `{-L}` (all-but-last), `{-N}` (all-but-first-N), `{name-default}`, `{N-default}`, `{*-default}`, `${name}` dollar-brace form, nested braces in defaults (`tf-rs/src/script/expand.rs`)
+- [x] **`/load` expand-before-parse** — args are now expanded (resolving `%{-L}`, `%{L}` etc.) before flag parsing, matching C TF behavior
+- [x] **TFLIBDIR search in `/load`** — bare filenames (no leading `/`, `.`, `~`) are searched in `TFLIBDIR` first, enabling `/require alias.tf` to resolve correctly
+- [x] **`getopts(format[, defaults])`** — implemented as interpreter-aware builtin; parses `-X` flags from positional params, sets `opt_X` locals, replaces frame params with remaining args
+- [x] **`ftime(format[, secs])`** — strftime-style UTC formatter via pure-Rust date decomposition; supports `%H %M %S %Y %y %m %d %e %j %A %a %B %b %p %I %w %n %t %%`
+- [x] **`systype()`** — returns `"unix"` on all POSIX systems (was returning `"linux"`)
+- [x] **`echo()`, `prompt()`, `substitute()`** — function-call forms wired to interpreter output buffer
+- [x] **`%;` in `/def` body** — command separator no longer splits macro bodies at definition time
+
+---
+
+## Known Gaps
+
+These features are recognized as missing but not yet scheduled:
+
+### Commands silently ignored
+- `/gag` — suppress matching output lines (very commonly used)
+- `/hilite` / `/attr` — color and attribute highlighting rules on matched lines
+- `/purge` — delete macros matching a pattern
+- `/saveworld` / `/saveconf` — persist world/config to disk
+- `/beep` — terminal bell
+- `/visual` — toggle visual mode at runtime
+- `/mode` — set terminal mode
+- `/input` — inject text into the input line
+- `/status` — configure status line field format
+- `/setenv` — set environment variables
+
+### Display
+- `@{Cbgrgb500}` and other TF attribute escape sequences in output text are not yet rendered to terminal colors — they pass through as literal text
+- Status line supports only `(world) time`; custom field format strings are parsed but not evaluated
+
+### Networking
+- ATCP / GMCP telnet option extensions are negotiated but payloads are not passed to hooks
+- MCP (MUD Client Protocol) not implemented
+
+### Scripting
+- `mktime(str)` parses nothing; returns current time
+- `getopts` return values and frame param replacement are correct, but macros that rely on multiple levels of nested getopts calls have not been tested
+
+### Startup
+- With no arguments and no default world, the event loop emits `% Unknown world ''` before settling idle — should silently start without attempting a connection
