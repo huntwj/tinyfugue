@@ -69,6 +69,11 @@ pub enum ScriptAction {
     /// Close the current log file (mirrors `/nolog`).
     StopLog,
 
+    // ── Persistence ────────────────────────────────────────────────────────
+    /// Write world definitions to a file (or stdout) (`/saveworld [file]`).
+    /// `name` filters to a single world when `Some`; `None` saves all worlds.
+    SaveWorlds { path: Option<String>, name: Option<String> },
+
     // ── Miscellaneous ──────────────────────────────────────────────────────
     /// Ring the terminal bell (`/beep`).
     Bell,
@@ -596,6 +601,26 @@ impl Interpreter {
             }
 
             // ── Miscellaneous ─────────────────────────────────────────────────
+            "saveworld" => {
+                // /saveworld [-w <world>] [<file>]
+                // Flags: -w <name> restricts to one world.
+                let expanded = expand(args, self)?;
+                let mut rest = expanded.trim();
+                let mut world_name: Option<String> = None;
+
+                // Consume optional -w <name> flag.
+                if rest.starts_with("-w") {
+                    rest = rest[2..].trim_start();
+                    let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+                    world_name = Some(rest[..end].to_owned());
+                    rest = rest[end..].trim_start();
+                }
+
+                let path = if rest.is_empty() { None } else { Some(rest.to_owned()) };
+                self.actions.push(ScriptAction::SaveWorlds { path, name: world_name });
+                Ok(None)
+            }
+
             "beep" => {
                 self.actions.push(ScriptAction::Bell);
                 Ok(None)

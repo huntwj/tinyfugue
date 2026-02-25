@@ -677,6 +677,42 @@ impl EventLoop {
 
             // ── Miscellaneous ─────────────────────────────────────────────
 
+            ScriptAction::SaveWorlds { path, name } => {
+                use std::io::Write;
+                let lines: Vec<String> = self
+                    .worlds
+                    .iter()
+                    .filter(|w| name.as_deref().is_none_or(|n| w.name == n))
+                    .map(|w| w.to_addworld())
+                    .collect();
+                match path {
+                    Some(p) => {
+                        match std::fs::OpenOptions::new()
+                            .create(true).write(true).truncate(true).open(&p)
+                        {
+                            Ok(mut f) => {
+                                for line in &lines { let _ = writeln!(f, "{line}"); }
+                                let msg = format!("% Saved {} world(s) to {p}", lines.len());
+                                self.screen.push_line(LogicalLine::plain(&msg));
+                            }
+                            Err(e) => {
+                                self.screen.push_line(LogicalLine::plain(
+                                    &format!("% /saveworld: {e}")));
+                            }
+                        }
+                    }
+                    None => {
+                        for line in &lines {
+                            self.screen.push_line(LogicalLine::plain(line));
+                        }
+                        if lines.is_empty() {
+                            self.screen.push_line(LogicalLine::plain("% No worlds to save."));
+                        }
+                    }
+                }
+                self.need_refresh = true;
+            }
+
             ScriptAction::Bell => {
                 use std::io::Write;
                 let _ = std::io::stdout().write_all(b"\x07");

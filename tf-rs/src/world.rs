@@ -61,6 +61,48 @@ impl World {
     pub fn is_connectable(&self) -> bool {
         self.host.is_some() && self.port.is_some()
     }
+
+    /// Serialize this world as a `/addworld` command line.
+    ///
+    /// Format mirrors the C TF output:
+    /// `/addworld [-Ttype] [-s myhost] [-e] [-x] [-p] name[=char[,pass]] host port [mfile]`
+    pub fn to_addworld(&self) -> String {
+        let mut parts: Vec<String> = vec!["/addworld".to_owned()];
+
+        if let Some(t) = &self.world_type {
+            parts.push(format!("-T{t}"));
+        }
+        if let Some(h) = &self.myhost {
+            parts.push(format!("-s {h}"));
+        }
+        if self.flags.echo    { parts.push("-e".to_owned()); }
+        if self.flags.ssl     { parts.push("-x".to_owned()); }
+        if self.flags.no_proxy { parts.push("-p".to_owned()); }
+
+        // name[=char[,pass]]
+        let mut name_field = self.name.clone();
+        if let Some(ch) = &self.character {
+            name_field.push('=');
+            name_field.push_str(ch);
+            if let Some(pw) = &self.pass {
+                name_field.push(',');
+                name_field.push_str(pw);
+            }
+        }
+        parts.push(name_field);
+
+        if let Some(host) = &self.host {
+            parts.push(host.clone());
+        }
+        if let Some(port) = &self.port {
+            parts.push(port.clone());
+        }
+        if let Some(mf) = &self.mfile {
+            parts.push(mf.clone());
+        }
+
+        parts.join(" ")
+    }
 }
 
 // ── WorldStore ────────────────────────────────────────────────────────────────
@@ -218,6 +260,32 @@ mod tests {
         assert!(!w.is_connectable()); // port still missing
         w.port = Some("23".into());
         assert!(w.is_connectable());
+    }
+
+    #[test]
+    fn to_addworld_minimal() {
+        let mut w = World::named("mud");
+        w.host = Some("mud.example.com".into());
+        w.port = Some("4000".into());
+        assert_eq!(w.to_addworld(), "/addworld mud mud.example.com 4000");
+    }
+
+    #[test]
+    fn to_addworld_full() {
+        let mut w = World::named("mud");
+        w.world_type = Some("lp".into());
+        w.myhost = Some("192.168.1.1".into());
+        w.flags.ssl = true;
+        w.flags.no_proxy = true;
+        w.character = Some("player".into());
+        w.pass = Some("secret".into());
+        w.host = Some("mud.example.com".into());
+        w.port = Some("4000".into());
+        w.mfile = Some("~/mud.tf".into());
+        assert_eq!(
+            w.to_addworld(),
+            "/addworld -Tlp -s 192.168.1.1 -x -p mud=player,secret mud.example.com 4000 ~/mud.tf"
+        );
     }
 
     #[test]
