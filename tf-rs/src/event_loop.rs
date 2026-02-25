@@ -33,6 +33,7 @@ use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::mpsc;
 use tokio::time::sleep_until;
 
+use crate::attr::Attr;
 use crate::hook::Hook;
 use crate::keybind::{DoKeyOp, EditAction, InputProcessor, KeyBinding, Keymap};
 use crate::macros::MacroStore;
@@ -277,6 +278,11 @@ impl EventLoop {
             need_refresh: false,
             log_file: None,
         }
+    }
+
+    /// Returns `true` if there is a default world to auto-connect to.
+    pub fn has_default_world(&self) -> bool {
+        self.worlds.default_world().is_some()
     }
 
     /// Execute a `.tf` script file through the interpreter.
@@ -668,6 +674,21 @@ impl EventLoop {
 
             #[cfg(feature = "python")]
             ScriptAction::PythonKill => {}
+
+            // ── Miscellaneous ─────────────────────────────────────────────
+
+            ScriptAction::Bell => {
+                use std::io::Write;
+                let _ = std::io::stdout().write_all(b"\x07");
+                let _ = std::io::stdout().flush();
+            }
+
+            ScriptAction::PurgeMacros(pattern) => {
+                let count = self.macro_store.purge(pattern.as_deref());
+                let msg = format!("% Purged {count} macro(s).");
+                self.screen.push_line(LogicalLine::plain(&msg));
+                self.need_refresh = true;
+            }
         }
     }
 
@@ -729,9 +750,17 @@ impl EventLoop {
 
                 // Determine gag and merged attr from trigger actions.
                 let gagged = actions.iter().any(|a| a.gag);
+                let merged_attr = actions.iter().fold(Attr::EMPTY, |acc, a| acc | a.attr);
 
                 if !gagged {
-                    let line = LogicalLine::plain(&text);
+                    let line = if merged_attr == Attr::EMPTY {
+                        LogicalLine::plain(&text)
+                    } else {
+                        LogicalLine::new(
+                            { let mut t = crate::tfstr::TfStr::new(); t.push_str(&text, None); t },
+                            merged_attr,
+                        )
+                    };
                     self.screen.push_line(line);
                     // Write to log file if open.
                     if let Some(ref mut f) = self.log_file {

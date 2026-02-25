@@ -69,6 +69,13 @@ pub enum ScriptAction {
     /// Close the current log file (mirrors `/nolog`).
     StopLog,
 
+    // ── Miscellaneous ──────────────────────────────────────────────────────
+    /// Ring the terminal bell (`/beep`).
+    Bell,
+    /// Delete macros whose name matches `pattern`, or all anonymous macros
+    /// when `pattern` is `None` (`/purge [pattern]`).
+    PurgeMacros(Option<String>),
+
     // ── Lua scripting (requires the `lua` Cargo feature) ──────────────────
     /// Load and execute a Lua source file (`/loadlua path`).
     #[cfg(feature = "lua")]
@@ -585,6 +592,36 @@ impl Interpreter {
 
             "nolog" => {
                 self.actions.push(ScriptAction::StopLog);
+                Ok(None)
+            }
+
+            // ── Miscellaneous ─────────────────────────────────────────────────
+            "beep" => {
+                self.actions.push(ScriptAction::Bell);
+                Ok(None)
+            }
+
+            "setenv" => {
+                // /setenv NAME=value  or  /setenv NAME value
+                let expanded = expand(args, self)?;
+                let s = expanded.trim();
+                // SAFETY: TF is single-threaded from the user's perspective;
+                // the Tokio runtime has no other threads reading env vars.
+                unsafe {
+                    if let Some((name, val)) = s.split_once('=') {
+                        std::env::set_var(name.trim(), val);
+                    } else if let Some((name, val)) = s.split_once(char::is_whitespace) {
+                        std::env::set_var(name, val.trim_start());
+                    }
+                }
+                Ok(None)
+            }
+
+            "purge" => {
+                let expanded = expand(args, self)?;
+                let s = expanded.trim();
+                let pattern = if s.is_empty() { None } else { Some(s.to_owned()) };
+                self.actions.push(ScriptAction::PurgeMacros(pattern));
                 Ok(None)
             }
 

@@ -218,6 +218,27 @@ impl MacroStore {
         true
     }
 
+    /// Remove macros matching `pattern` (compared against macro name).
+    ///
+    /// When `pattern` is `None`, removes all anonymous (unnamed) macros.
+    /// Returns the count of macros removed.
+    pub fn purge(&mut self, pattern: Option<&str>) -> usize {
+        let to_remove: Vec<u32> = self
+            .macros
+            .iter()
+            .filter(|(_, mac)| match pattern {
+                None => mac.name.is_none(),
+                Some(pat) => mac.name.as_deref().is_some_and(|n| n == pat || n.starts_with(pat)),
+            })
+            .map(|(&num, _)| num)
+            .collect();
+        let count = to_remove.len();
+        for num in to_remove {
+            self.remove_by_num(num);
+        }
+        count
+    }
+
     /// Remove a macro by name.  Returns `true` if it existed.
     pub fn remove_by_name(&mut self, name: &str) -> bool {
         let Some(&num) = self.by_name.get(name) else {

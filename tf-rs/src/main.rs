@@ -69,7 +69,11 @@ async fn main() {
     if !args.no_connect {
         match args.connect {
             ConnectTarget::Default => {
-                event_loop.connect_world_by_name("").await;
+                // Only auto-connect if there is a default world to connect to;
+                // otherwise start idle (no "% Unknown world ''" noise).
+                if event_loop.has_default_world() {
+                    event_loop.connect_world_by_name("").await;
+                }
             }
             ConnectTarget::World(name) => {
                 event_loop.connect_world_by_name(&name).await;
