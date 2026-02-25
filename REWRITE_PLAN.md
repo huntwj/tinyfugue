@@ -249,8 +249,7 @@ These features are recognized as missing but not yet scheduled:
 - `/purge [pattern]` — ✓ `MacroStore::purge()` removes anonymous or prefix-matched macros
 - `/saveworld [-w world] [file]` — ✓ `World::to_addworld()` serializes to `/addworld` command syntax; writes to file or prints to screen
 - `/beep` — ✓ writes `\x07` to stdout via `ScriptAction::Bell`
-- `/visual` — toggle visual mode at runtime
-- `/mode` — set terminal mode
+- `/visual`, `/mode`, `/redraw` — ✓ explicit no-op stubs; binary always runs in visual mode
 - `/input` — inject text into the input line
 - `/status` — configure status line field format
 - `/setenv name=value` — ✓ calls `std::env::set_var`

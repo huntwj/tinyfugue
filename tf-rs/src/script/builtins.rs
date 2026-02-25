@@ -216,13 +216,18 @@ pub fn call_builtin(name: &str, args: Vec<Value>) -> Option<Result<Value, String
                 Value::Str(ftime_format(&fmt, secs))
             }
             "mktime" => {
-                // mktime(time_str) — parse time string, return Unix timestamp.
-                // Simplified: just return current time.
-                let secs = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0);
-                Value::Int(secs as i64)
+                // mktime(time_str) — parse time string, return Unix timestamp (UTC).
+                // Accepted formats (matching common ftime output):
+                //   "YYYY-MM-DD HH:MM:SS"  "YYYY/MM/DD HH:MM:SS"
+                //   "HH:MM:SS"             bare integer (pass-through)
+                let s = get_str(&args, 0, name)?;
+                let ts = mktime_parse(s.trim()).unwrap_or_else(|| {
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs() as i64)
+                        .unwrap_or(0)
+                });
+                Value::Int(ts)
             }
 
             // ── Attribute / display ──────────────────────────────────────────
@@ -254,6 +259,88 @@ pub fn call_builtin(name: &str, args: Vec<Value>) -> Option<Result<Value, String
     }
 
     inner(name, args).transpose()
+}
+
+// ── mktime helper ────────────────────────────────────────────────────────────
+
+/// Parse a time string and return a UTC Unix timestamp, or `None` on failure.
+///
+/// Accepted formats:
+/// - `"YYYY-MM-DD HH:MM:SS"` or `"YYYY/MM/DD HH:MM:SS"`
+/// - `"HH:MM:SS"` (uses today's UTC date)
+/// - A bare integer string (returned as-is)
+fn mktime_parse(s: &str) -> Option<i64> {
+    // Bare integer pass-through.
+    if let Ok(n) = s.parse::<i64>() {
+        return Some(n);
+    }
+
+    // Determine current UTC date for the time-only form.
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let today_days = now_secs.div_euclid(86400);
+    let (today_y, today_m, today_d) = civil_from_days(today_days);
+
+    // Try "YYYY-MM-DD HH:MM:SS" or "YYYY/MM/DD HH:MM:SS".
+    let parts: Vec<&str> = s.splitn(2, char::is_whitespace).collect();
+    if parts.len() == 2 {
+        let date_part = parts[0];
+        let time_part = parts[1];
+        let sep = if date_part.contains('-') { '-' } else { '/' };
+        let dp: Vec<&str> = date_part.splitn(3, sep).collect();
+        let tp: Vec<&str> = time_part.splitn(3, ':').collect();
+        if dp.len() == 3 && tp.len() == 3 {
+            let y: i64 = dp[0].parse().ok()?;
+            let mo: u32 = dp[1].parse().ok()?;
+            let d: u32  = dp[2].parse().ok()?;
+            let h: i64  = tp[0].parse().ok()?;
+            let mi: i64 = tp[1].parse().ok()?;
+            let sc: i64 = tp[2].parse().ok()?;
+            let days = days_from_civil(y, mo, d);
+            return Some(days * 86400 + h * 3600 + mi * 60 + sc);
+        }
+    }
+
+    // Try "HH:MM:SS".
+    let tp: Vec<&str> = s.splitn(3, ':').collect();
+    if tp.len() == 3 {
+        let h: i64  = tp[0].parse().ok()?;
+        let mi: i64 = tp[1].parse().ok()?;
+        let sc: i64 = tp[2].parse().ok()?;
+        let days = days_from_civil(today_y, today_m, today_d);
+        return Some(days * 86400 + h * 3600 + mi * 60 + sc);
+    }
+
+    None
+}
+
+/// Convert (year, month 1-12, day 1-31) to days since Unix epoch.
+/// Algorithm: Howard Hinnant's `days_from_civil`.
+fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = (y - era * 400) as u32;
+    let mp = if m > 2 { m - 3 } else { m + 9 };
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe as i64 - 719_468
+}
+
+/// Decompose days-since-epoch into (year, month 1-12, day 1-31).
+/// Mirrors the algorithm used in `ftime_format`.
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u32;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let mo = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe as i64 + era * 400 + if mo <= 2 { 1 } else { 0 };
+    (y, mo, d)
 }
 
 // ── ftime helper ─────────────────────────────────────────────────────────────
@@ -524,6 +611,53 @@ mod tests {
             ],
         );
         assert_eq!(v, Value::Str("hi€€€".into()));
+    }
+
+    #[test]
+    fn mktime_bare_int() {
+        assert_eq!(
+            call("mktime", vec![Value::Str("1000000".into())]),
+            Value::Int(1_000_000)
+        );
+    }
+
+    #[test]
+    fn mktime_full_datetime() {
+        // 1970-01-01 00:00:00 UTC == 0
+        assert_eq!(
+            call("mktime", vec![Value::Str("1970-01-01 00:00:00".into())]),
+            Value::Int(0)
+        );
+        // 1970-01-01 00:01:00 UTC == 60
+        assert_eq!(
+            call("mktime", vec![Value::Str("1970-01-01 00:01:00".into())]),
+            Value::Int(60)
+        );
+    }
+
+    #[test]
+    fn mktime_slash_separator() {
+        assert_eq!(
+            call("mktime", vec![Value::Str("1970/01/01 00:00:00".into())]),
+            Value::Int(0)
+        );
+    }
+
+    #[test]
+    fn mktime_roundtrip_with_ftime() {
+        // ftime then mktime should return the original timestamp (UTC, whole seconds).
+        let ts = 1_700_000_000i64;
+        let formatted = match call("ftime", vec![
+            Value::Str("%Y-%m-%d %H:%M:%S".into()),
+            Value::Int(ts),
+        ]) {
+            Value::Str(s) => s,
+            other => panic!("expected Str, got {other:?}"),
+        };
+        assert_eq!(
+            call("mktime", vec![Value::Str(formatted)]),
+            Value::Int(ts)
+        );
     }
 
     #[test]
