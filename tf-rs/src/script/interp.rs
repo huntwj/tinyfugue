@@ -621,6 +621,12 @@ impl Interpreter {
                 Ok(None)
             }
 
+            // ── Display-mode stubs ────────────────────────────────────────────
+            // The Rust binary always runs in visual (full-screen) mode.
+            // /visual and /mode are accepted and silently succeed so that
+            // config files that contain them don't produce errors.
+            "visual" | "mode" | "redraw" => Ok(None),
+
             "beep" => {
                 self.actions.push(ScriptAction::Bell);
                 Ok(None)
