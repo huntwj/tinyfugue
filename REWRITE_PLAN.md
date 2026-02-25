@@ -247,7 +247,7 @@ These features are recognized as missing but not yet scheduled:
 - `/gag` — already works via `/def -ag`; no standalone command needed
 - `/hilite` / `/attr` — ✓ trigger `attr` field now applied to `LogicalLine` on match
 - `/purge [pattern]` — ✓ `MacroStore::purge()` removes anonymous or prefix-matched macros
-- `/saveworld` / `/saveconf` — persist world/config to disk
+- `/saveworld [-w world] [file]` — ✓ `World::to_addworld()` serializes to `/addworld` command syntax; writes to file or prints to screen
 - `/beep` — ✓ writes `\x07` to stdout via `ScriptAction::Bell`
 - `/visual` — toggle visual mode at runtime
 - `/mode` — set terminal mode

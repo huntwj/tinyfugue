@@ -101,6 +101,129 @@ impl TfStr {
     }
 }
 
+impl TfStr {
+    /// Parse a string that may contain TF `@{...}` attribute sequences,
+    /// returning a [`TfStr`] with per-character display attributes.
+    ///
+    /// Recognized codes inside `@{...}`:
+    /// - `n` or empty — reset all attributes to [`Attr::EMPTY`]
+    /// - `b`/`B` bold · `u`/`U` underline · `i`/`I` italic
+    /// - `r`/`R` reverse · `h`/`H` hilite · `f`/`F` flash (ignored) · `d`/`D` dim (ignored)
+    /// - `C<name>` — set foreground color; `Cbg<name>` — set background color
+    ///
+    /// Named colors: `black`, `red`, `green`, `yellow`, `blue`, `magenta`,
+    /// `cyan`, `white`, and `bright`-prefixed variants.  RGB colors (`rgbXYZ`,
+    /// X/Y/Z each 0–5) are mapped to the nearest 16-color value.  Unknown
+    /// sequences are stripped silently.
+    pub fn from_tf_markup(text: &str) -> Self {
+        let mut out = TfStr::new();
+        let mut cur = Attr::EMPTY;
+        let mut chars = text.chars().peekable();
+
+        while let Some(ch) = chars.next() {
+            if ch == '@' && chars.peek() == Some(&'{') {
+                chars.next(); // consume '{'
+                let mut spec = String::new();
+                loop {
+                    match chars.next() {
+                        None | Some('}') => break,
+                        Some(c) => spec.push(c),
+                    }
+                }
+                cur = tf_apply_spec(&spec, cur);
+            } else {
+                let attr = if cur == Attr::EMPTY { None } else { Some(cur) };
+                out.push(ch, attr);
+            }
+        }
+        out
+    }
+}
+
+// ── @{...} attribute-spec helpers ─────────────────────────────────────────────
+
+fn tf_apply_spec(spec: &str, cur: Attr) -> Attr {
+    let spec = spec.trim();
+    if spec.is_empty() || spec == "n" {
+        return Attr::EMPTY;
+    }
+    let mut attr = cur;
+    let mut chars = spec.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            'n'       => { attr = Attr::EMPTY; }
+            'b' | 'B' => { attr |= Attr::BOLD; }
+            'u' | 'U' => { attr |= Attr::UNDERLINE; }
+            'i' | 'I' => { attr |= Attr::ITALIC; }
+            'r' | 'R' => { attr |= Attr::REVERSE; }
+            'h' | 'H' => { attr |= Attr::HILITE; }
+            'f' | 'F' | 'd' | 'D' => {} // flash / dim — no direct mapping
+            'C' => {
+                let name: String = chars.collect();
+                if let Some(rest) = name.strip_prefix("bg") {
+                    if let Some(idx) = tf_color_index(rest) {
+                        attr = attr.with_bg(idx & 0x07); // 3-bit BG in current Attr layout
+                    }
+                } else if let Some(idx) = tf_color_index(&name) {
+                    attr = attr.with_fg(idx);
+                }
+                break; // color consumed rest of spec
+            }
+            _ => {}
+        }
+    }
+    attr
+}
+
+fn tf_color_index(name: &str) -> Option<u8> {
+    match name.to_lowercase().as_str() {
+        "black"                                      => Some(0),
+        "red"                                        => Some(1),
+        "green"                                      => Some(2),
+        "yellow"                                     => Some(3),
+        "blue"                                       => Some(4),
+        "magenta"                                    => Some(5),
+        "cyan"                                       => Some(6),
+        "white"                                      => Some(7),
+        "gray" | "grey" | "darkgray" | "brightblack" => Some(8),
+        "brightred"                                  => Some(9),
+        "brightgreen"                                => Some(10),
+        "brightyellow"                               => Some(11),
+        "brightblue"                                 => Some(12),
+        "brightmagenta"                              => Some(13),
+        "brightcyan"                                 => Some(14),
+        "brightwhite"                                => Some(15),
+        s if s.starts_with("rgb") && s.len() == 6 => {
+            let mut digits = [0u8; 3];
+            for (i, b) in s[3..].bytes().enumerate() {
+                if i >= 3 || !(b'0'..=b'5').contains(&b) { return None; }
+                digits[i] = b - b'0';
+            }
+            Some(tf_rgb_to_16(digits[0], digits[1], digits[2]))
+        }
+        _ => None,
+    }
+}
+
+/// Map an `rgbXYZ` colour (X, Y, Z each 0–5) to the nearest 16-colour index.
+fn tf_rgb_to_16(r: u8, g: u8, b: u8) -> u8 {
+    if r == g && g == b {
+        return match r { 0 => 0, 1 | 2 => 8, 3 | 4 => 7, _ => 15 };
+    }
+    let bright = r >= 3 || g >= 3 || b >= 3;
+    let base: u8 = match (r > 0, g > 0, b > 0) {
+        (true,  true,  true)  => 7,
+        (true,  true,  false) => 3,
+        (true,  false, true)  => 5,
+        (false, true,  true)  => 6,
+        (true,  false, false) => 1,
+        (false, true,  false) => 2,
+        (false, false, true)  => 4,
+        (false, false, false) => 0,
+    };
+    base + if bright { 8 } else { 0 }
+}
+
 impl From<&str> for TfStr {
     fn from(s: &str) -> Self {
         Self {
@@ -209,6 +332,75 @@ mod tests {
         assert_eq!(s.char_count(), 2); // chars
         assert_eq!(s.attr_at(0), Some(Attr::BOLD));
         assert_eq!(s.attr_at(1), Some(Attr::ITALIC));
+    }
+
+    #[test]
+    fn from_tf_markup_plain() {
+        let s = TfStr::from_tf_markup("hello");
+        assert_eq!(s.data, "hello");
+        assert!(s.char_attrs().is_none());
+    }
+
+    #[test]
+    fn from_tf_markup_bold_reset() {
+        let s = TfStr::from_tf_markup("@{B}hi@{n}bye");
+        assert_eq!(s.data, "hibye");
+        let attrs = s.char_attrs().unwrap();
+        assert_eq!(attrs[0], Attr::BOLD);
+        assert_eq!(attrs[1], Attr::BOLD);
+        assert_eq!(attrs[2], Attr::EMPTY);
+        assert_eq!(attrs[3], Attr::EMPTY);
+        assert_eq!(attrs[4], Attr::EMPTY);
+    }
+
+    #[test]
+    fn from_tf_markup_fg_color() {
+        let s = TfStr::from_tf_markup("@{Cred}x@{n}");
+        assert_eq!(s.data, "x");
+        let attrs = s.char_attrs().unwrap();
+        assert_eq!(attrs[0].fg_color(), Some(color::RED));
+    }
+
+    #[test]
+    fn from_tf_markup_bg_color() {
+        let s = TfStr::from_tf_markup("@{Cbgblue}x@{n}");
+        assert_eq!(s.data, "x");
+        // BG is stored in 3-bit field, blue=4 → 4 & 0x07 = 4
+        assert_eq!(attrs_for(&s)[0].bg_color(), Some(4));
+    }
+
+    #[test]
+    fn from_tf_markup_rgb_red() {
+        // rgb500 = pure red → nearest 16-color is bright red (9)
+        let s = TfStr::from_tf_markup("@{Crgb500}x");
+        let attrs = s.char_attrs().unwrap();
+        assert_eq!(attrs[0].fg_color(), Some(color::BRIGHT_RED));
+    }
+
+    #[test]
+    fn from_tf_markup_rgb_black() {
+        let s = TfStr::from_tf_markup("@{Cbgrgb000}x");
+        let attrs = s.char_attrs().unwrap();
+        // rgb000 → black (0)
+        assert_eq!(attrs[0].bg_color(), Some(0));
+    }
+
+    #[test]
+    fn from_tf_markup_empty_resets() {
+        let s = TfStr::from_tf_markup("@{B}a@{}b");
+        let attrs = s.char_attrs().unwrap();
+        assert_eq!(attrs[0], Attr::BOLD);
+        assert_eq!(attrs[1], Attr::EMPTY);
+    }
+
+    #[test]
+    fn from_tf_markup_strips_sequences_from_text() {
+        let s = TfStr::from_tf_markup("@{B}hello@{n} world");
+        assert_eq!(s.data, "hello world");
+    }
+
+    fn attrs_for(s: &TfStr) -> Vec<Attr> {
+        s.chars_and_attrs().map(|(_, a)| a).collect()
     }
 
     #[test]

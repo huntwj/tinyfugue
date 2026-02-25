@@ -471,10 +471,11 @@ impl EventLoop {
             self.screen.push_line(LogicalLine::plain(&format!("% Error: {e}")));
             self.need_refresh = true;
         }
-        // Push interpreter output to the screen.
+        // Push interpreter output to the screen, parsing @{...} markup.
         let lines: Vec<String> = self.interp.output.drain(..).collect();
         for line in lines {
-            self.screen.push_line(LogicalLine::plain(&line));
+            let content = crate::tfstr::TfStr::from_tf_markup(&line);
+            self.screen.push_line(LogicalLine::new(content, Attr::EMPTY));
             self.need_refresh = true;
         }
         // Process queued side-effects.
@@ -860,7 +861,8 @@ impl EventLoop {
                     self.screen.push_line(LogicalLine::plain(&msg));
                 }
                 for line in self.interp.output.drain(..) {
-                    self.screen.push_line(LogicalLine::plain(&line));
+                    let content = crate::tfstr::TfStr::from_tf_markup(&line);
+                    self.screen.push_line(LogicalLine::new(content, Attr::EMPTY));
                 }
                 // Drain simple actions (AddWorld, DefMacro) but skip
                 // Connect/Disconnect to avoid re-entrancy.
