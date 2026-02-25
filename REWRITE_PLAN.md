@@ -244,16 +244,16 @@ Issues found during daily use and fixed after the Phase 15 cutover:
 These features are recognized as missing but not yet scheduled:
 
 ### Commands silently ignored
-- `/gag` — suppress matching output lines (very commonly used)
-- `/hilite` / `/attr` — color and attribute highlighting rules on matched lines
-- `/purge` — delete macros matching a pattern
+- `/gag` — already works via `/def -ag`; no standalone command needed
+- `/hilite` / `/attr` — ✓ trigger `attr` field now applied to `LogicalLine` on match
+- `/purge [pattern]` — ✓ `MacroStore::purge()` removes anonymous or prefix-matched macros
 - `/saveworld` / `/saveconf` — persist world/config to disk
-- `/beep` — terminal bell
+- `/beep` — ✓ writes `\x07` to stdout via `ScriptAction::Bell`
 - `/visual` — toggle visual mode at runtime
 - `/mode` — set terminal mode
 - `/input` — inject text into the input line
 - `/status` — configure status line field format
-- `/setenv` — set environment variables
+- `/setenv name=value` — ✓ calls `std::env::set_var`
 
 ### Display
 - `@{Cbgrgb500}` and other TF attribute escape sequences in output text are not yet rendered to terminal colors — they pass through as literal text
@@ -265,7 +265,6 @@ These features are recognized as missing but not yet scheduled:
 
 ### Scripting
 - `mktime(str)` parses nothing; returns current time
-- `getopts` return values and frame param replacement are correct, but macros that rely on multiple levels of nested getopts calls have not been tested
 
 ### Startup
-- With no arguments and no default world, the event loop emits `% Unknown world ''` before settling idle — should silently start without attempting a connection
+- ✓ Bare `tf` invocation with no default world now starts idle cleanly
