@@ -735,6 +735,15 @@ impl EvalContext for Interpreter {
     }
 
     fn call_fn(&mut self, name: &str, args: Vec<Value>) -> Result<Value, String> {
+        // Functions that need interpreter state (params, locals, output).
+        match name {
+            "getopts" => return self.builtin_getopts(&args),
+            "echo"    => return self.builtin_echo_fn(&args),
+            "prompt"  => return self.builtin_prompt_fn(&args),
+            "substitute" => return self.builtin_substitute_fn(&args),
+            _ => {}
+        }
+
         if let Some(result) = call_builtin(name, args.clone()) {
             return result;
         }
@@ -750,6 +759,139 @@ impl EvalContext for Interpreter {
 
     fn eval_expr_str(&mut self, s: &str) -> Result<Value, String> {
         eval_str(s, self)
+    }
+}
+
+// ── Interpreter-aware builtin functions ────────────────────────────────────
+
+impl Interpreter {
+
+    /// `getopts(format[, default_args])` — parse option flags from the
+    /// current macro's positional parameters.
+    ///
+    /// `format` is a string of flag characters; `:` after a char means that
+    /// flag takes a value argument.  For each flag `-X` found in the params,
+    /// sets local variable `opt_X` to `1` (boolean) or to the flag value
+    /// (when `:` is present).  Remaining non-option params replace the frame's
+    /// positional params.
+    ///
+    /// Returns `Value::Int(1)` on success, `Value::Int(0)` on error (unknown
+    /// flag, missing value, etc.).
+    fn builtin_getopts(&mut self, args: &[Value]) -> Result<Value, String> {
+        let fmt = match args.first() {
+            Some(v) => v.as_str(),
+            None => return Ok(Value::Int(0)),
+        };
+        let default_args = args.get(1).map(|v| v.as_str());
+
+        // Build flag table: flag_char → takes_value
+        let mut flags: std::collections::HashMap<char, bool> = std::collections::HashMap::new();
+        let fmt_chars: Vec<char> = fmt.chars().collect();
+        let mut fi = 0;
+        while fi < fmt_chars.len() {
+            let c = fmt_chars[fi];
+            if c == ':' { fi += 1; continue; }
+            let takes_val = fmt_chars.get(fi + 1) == Some(&':');
+            flags.insert(c, takes_val);
+            fi += 1;
+        }
+
+        // Get current positional params (use default_args if no params).
+        let params: Vec<String> = {
+            let p = self.positional_params();
+            if p.is_empty() {
+                if let Some(def) = default_args {
+                    if def.is_empty() {
+                        vec![]
+                    } else {
+                        def.split_whitespace().map(str::to_owned).collect()
+                    }
+                } else {
+                    vec![]
+                }
+            } else {
+                p.to_vec()
+            }
+        };
+
+        let mut i = 0;
+        let mut remaining: Vec<String> = Vec::new();
+        let mut ok = true;
+
+        while i < params.len() {
+            let arg = &params[i];
+            if arg == "--" {
+                // End of options; everything after goes to remaining.
+                i += 1;
+                remaining.extend(params[i..].iter().cloned());
+                break;
+            }
+            if !arg.starts_with('-') || arg == "-" {
+                // Not an option; collect as remaining.
+                remaining.extend(params[i..].iter().cloned());
+                break;
+            }
+            // Parse flags from this token (e.g., "-pAw" or "-w world").
+            let mut chars = arg[1..].chars().peekable();
+            while let Some(c) = chars.next() {
+                match flags.get(&c) {
+                    None => {
+                        // Unknown flag.
+                        ok = false;
+                        break;
+                    }
+                    Some(true) => {
+                        // Flag takes a value.
+                        let val: String = chars.collect(); // rest of this token
+                        let val = if val.is_empty() {
+                            // Value is the next positional param.
+                            i += 1;
+                            params.get(i).cloned().unwrap_or_default()
+                        } else {
+                            val
+                        };
+                        self.set_local(&format!("opt_{c}"), Value::Str(val));
+                        break; // consumed rest of token as value
+                    }
+                    Some(false) => {
+                        // Boolean flag.
+                        self.set_local(&format!("opt_{c}"), Value::Int(1));
+                    }
+                }
+            }
+            if !ok { break; }
+            i += 1;
+        }
+
+        // Replace the frame's positional params with the remaining args.
+        if let Some(frame) = self.frames.last_mut() {
+            frame.params = remaining;
+        }
+
+        Ok(Value::Int(if ok { 1 } else { 0 }))
+    }
+
+    /// `echo(text[, attr[, pageable[, dest]]])` — output a line.
+    /// This is the function form called from within macro bodies.
+    fn builtin_echo_fn(&mut self, args: &[Value]) -> Result<Value, String> {
+        let text = args.first().map(|v| v.as_str()).unwrap_or_default();
+        // attr, pageable, dest are accepted but ignored in this implementation.
+        self.output.push(text);
+        Ok(Value::Int(1))
+    }
+
+    /// `prompt(text[, attr[, pageable]])` — set the input-line prompt text.
+    fn builtin_prompt_fn(&mut self, args: &[Value]) -> Result<Value, String> {
+        let text = args.first().map(|v| v.as_str()).unwrap_or_default();
+        self.output.push(format!("[prompt] {text}"));
+        Ok(Value::Int(1))
+    }
+
+    /// `substitute(text[, attr[, pageable]])` — substitute the current line.
+    fn builtin_substitute_fn(&mut self, args: &[Value]) -> Result<Value, String> {
+        let text = args.first().map(|v| v.as_str()).unwrap_or_default();
+        self.output.push(text);
+        Ok(Value::Int(1))
     }
 }
 

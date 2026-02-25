@@ -126,7 +126,11 @@ pub fn parse_argv(argv: &[String]) -> Result<CliArgs, String> {
                     } else {
                         return Err("-c requires a command argument".to_owned());
                     };
-                    args.command = Some(cmd);
+                    // Multiple -c flags accumulate, separated by %;
+                    args.command = Some(match args.command.take() {
+                        None => cmd,
+                        Some(prev) => format!("{prev}%;{cmd}"),
+                    });
                 }
 
                 // -L<dir>

@@ -183,7 +183,57 @@ pub fn call_builtin(name: &str, args: Vec<Value>) -> Option<Result<Value, String
                     .ok_or_else(|| format!("{name}: too few args"))?;
                 Value::Str(v.type_name().to_owned())
             }
-            "systype" => Value::Str(std::env::consts::OS.to_owned()),
+            // TF reports the OS family, not the kernel name: "unix" on all
+            // POSIX-like systems (Linux, macOS, BSDs), "os/2" on OS/2.
+            "systype" => Value::Str(
+                if cfg!(target_os = "windows") { "windows" }
+                else { "unix" }
+                .to_owned()
+            ),
+            "getpid" => {
+                Value::Int(std::process::id() as i64)
+            }
+
+            // ── Time functions ───────────────────────────────────────────────
+            "time" => {
+                // time() → seconds since Unix epoch
+                let secs = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                Value::Int(secs as i64)
+            }
+            "ftime" => {
+                // ftime(format[, time]) — format a Unix timestamp.
+                // Uses strftime-style format codes (%H, %M, %Y, etc.).
+                let fmt = get_str(&args, 0, name)?;
+                let secs = args.get(1).map(|v| v.as_int() as u64).unwrap_or_else(|| {
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0)
+                });
+                Value::Str(ftime_format(&fmt, secs))
+            }
+            "mktime" => {
+                // mktime(time_str) — parse time string, return Unix timestamp.
+                // Simplified: just return current time.
+                let secs = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                Value::Int(secs as i64)
+            }
+
+            // ── Attribute / display ──────────────────────────────────────────
+            "decode_attr" => {
+                // decode_attr(text[, attr[, pageable]]) → text (passthrough)
+                Value::Str(get_str(&args, 0, name).unwrap_or_default())
+            }
+            "encode_attr" => {
+                Value::Str(get_str(&args, 0, name).unwrap_or_default())
+            }
+            "attrout" => Value::Int(0),
 
             // ── Character functions ───────────────────────────────────────────
             "ascii" => {
@@ -204,6 +254,83 @@ pub fn call_builtin(name: &str, args: Vec<Value>) -> Option<Result<Value, String
     }
 
     inner(name, args).transpose()
+}
+
+// ── ftime helper ─────────────────────────────────────────────────────────────
+
+/// Format a Unix timestamp using strftime-style codes (UTC).
+///
+/// Supported codes: `%H %M %S %Y %y %m %d %j %A %a %B %b %e %n %t %%`.
+fn ftime_format(fmt: &str, secs: u64) -> String {
+    let secs = secs as i64;
+    let day_secs = secs.rem_euclid(86400) as u32;
+    let days = secs.div_euclid(86400);
+
+    let h = day_secs / 3600;
+    let m = (day_secs % 3600) / 60;
+    let s = day_secs % 60;
+
+    // Decompose days-since-epoch to (year, month [1-12], day [1-31]).
+    // Algorithm: Howard Hinnant's civil_from_days.
+    let (year, month, day) = {
+        let z = days + 719_468;
+        let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+        let doe = (z - era * 146_097) as u32;
+        let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2) / 153;
+        let d = doy - (153 * mp + 2) / 5 + 1;
+        let mo = if mp < 10 { mp + 3 } else { mp - 9 };
+        let y = yoe as i64 + era * 400 + if mo <= 2 { 1 } else { 0 };
+        (y, mo, d)
+    };
+
+    // Day of year (1-366).
+    let yday: u32 = {
+        let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+        let mdays: [u32; 12] = [31, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+        mdays[..month as usize - 1].iter().sum::<u32>() + day
+    };
+
+    // Day of week (0=Sunday).
+    let wday = ((days + 4).rem_euclid(7)) as u32; // epoch was Thursday=4
+
+    let month_names = ["January","February","March","April","May","June",
+                       "July","August","September","October","November","December"];
+    let day_names   = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+
+    let mut out = String::with_capacity(fmt.len() + 16);
+    let mut chars = fmt.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '%' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            None        => { out.push('%'); }
+            Some('%')   => out.push('%'),
+            Some('n')   => out.push('\n'),
+            Some('t')   => out.push('\t'),
+            Some('H')   => out.push_str(&format!("{h:02}")),
+            Some('M')   => out.push_str(&format!("{m:02}")),
+            Some('S')   => out.push_str(&format!("{s:02}")),
+            Some('Y')   => out.push_str(&format!("{year}")),
+            Some('y')   => out.push_str(&format!("{:02}", year.rem_euclid(100))),
+            Some('m')   => out.push_str(&format!("{month:02}")),
+            Some('d')   => out.push_str(&format!("{day:02}")),
+            Some('e')   => out.push_str(&format!("{day:2}")),
+            Some('j')   => out.push_str(&format!("{yday:03}")),
+            Some('A')   => out.push_str(day_names[wday as usize]),
+            Some('a')   => out.push_str(&day_names[wday as usize][..3]),
+            Some('B')   => out.push_str(month_names[month as usize - 1]),
+            Some('b') | Some('h') => out.push_str(&month_names[month as usize - 1][..3]),
+            Some('p')   => out.push_str(if h < 12 { "AM" } else { "PM" }),
+            Some('I')   => out.push_str(&format!("{:02}", if h.is_multiple_of(12) { 12 } else { h % 12 })),
+            Some('w')   => out.push_str(&format!("{wday}")),
+            Some(other) => { out.push('%'); out.push(other); }
+        }
+    }
+    out
 }
 
 // ── Argument accessors ────────────────────────────────────────────────────────
