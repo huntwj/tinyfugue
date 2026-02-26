@@ -272,8 +272,8 @@ These features are recognized as missing but not yet scheduled:
 - ✓ `isvar(name)`, `ismacro(name)` — query interpreter's live variable/macro tables
 - ✓ `textencode`/`textdecode` — TF metacharacter escaping (`%`, `\`, `;`)
 - ✓ `strchr`, `strrchr`, `regmatch`, `filename`, `dirname` — common string/path functions
-- ✓ Stubs: `moresize`, `cputime`, `kbpoint`, `kbhead`, `kbtail`, `worldname`, `nworlds`, `status_fields`, `status_width`, `status_label`
-- `worldname()`/`nworlds()` return stubs — event-loop state not accessible from interpreter builtins
+- ✓ Stubs: `moresize`, `cputime`, `kbpoint`, `kbhead`, `kbtail`, `status_fields`, `status_width`, `status_label`
+- ✓ `worldname()` / `nworlds()` — `update_status()` syncs `active_world` name and `handles.len()` into interpreter globals `worldname`/`nworlds` on every world-state change; `call_fn` reads them back so scripts always see live values
 
 ### Startup
 - ✓ Bare `tf` invocation with no default world now starts idle cleanly

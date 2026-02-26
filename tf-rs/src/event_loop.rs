@@ -1045,7 +1045,11 @@ impl EventLoop {
     /// `%t` (HH:MM:SS).
     fn update_status(&mut self) {
         use std::time::{SystemTime, UNIX_EPOCH};
-        let world = self.active_world.as_deref().unwrap_or("(no world)").to_owned();
+        let world = self.active_world.as_deref().unwrap_or("").to_owned();
+        // Keep interpreter globals in sync so worldname() / nworlds() are accurate.
+        self.interp.set_global_var("worldname", crate::script::Value::Str(world.clone()));
+        self.interp.set_global_var("nworlds", crate::script::Value::Int(self.handles.len() as i64));
+        let world = if world.is_empty() { "(no world)".to_owned() } else { world };
         let secs = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())

@@ -369,9 +369,6 @@ pub fn call_builtin(name: &str, args: Vec<Value>) -> Option<Result<Value, String
                 // ismacro(name) → 0 (conservative stub; no macro store access here)
                 Value::Int(0)
             }
-            "worldname"     => Value::Str(String::new()), // active world name stub
-            "nworlds"       => Value::Int(0),              // number of worlds stub
-
             _ => return Ok(None),
         }))
     }

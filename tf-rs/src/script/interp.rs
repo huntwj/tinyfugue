@@ -894,6 +894,12 @@ impl EvalContext for Interpreter {
                 let exists = self.macros.contains_key(&mname);
                 return Ok(Value::Int(if exists { 1 } else { 0 }));
             }
+            "worldname" => {
+                return Ok(self.globals.get("worldname").cloned().unwrap_or_default());
+            }
+            "nworlds" => {
+                return Ok(self.globals.get("nworlds").cloned().unwrap_or(Value::Int(0)));
+            }
             _ => {}
         }
 
