@@ -254,6 +254,124 @@ pub fn call_builtin(name: &str, args: Vec<Value>) -> Option<Result<Value, String
                 Value::Str(ch.to_string())
             }
 
+            // ── String search ──────────────────────────────────────────────────
+            "strchr" => {
+                // strchr(str, char) → 0-based index of first occurrence, or -1
+                let s = get_str(&args, 0, name)?;
+                let c_str = get_str(&args, 1, name)?;
+                let c = c_str.chars().next().unwrap_or('\0');
+                Value::Int(s.chars().position(|ch| ch == c).map(|i| i as i64).unwrap_or(-1))
+            }
+            "strrchr" => {
+                // strrchr(str, char) → 0-based index of last occurrence, or -1
+                let s = get_str(&args, 0, name)?;
+                let c_str = get_str(&args, 1, name)?;
+                let c = c_str.chars().next().unwrap_or('\0');
+                let chars: Vec<char> = s.chars().collect();
+                Value::Int(chars.iter().enumerate().rev()
+                    .find(|(_, &ch)| ch == c)
+                    .map(|(i, _)| i as i64).unwrap_or(-1))
+            }
+            "regmatch" => {
+                // regmatch(pattern, string[, repl]) → 1 if matches, 0 otherwise
+                let pat = get_str(&args, 0, name)?;
+                let s   = get_str(&args, 1, name)?;
+                let matched = crate::pattern::Pattern::new(
+                    &pat,
+                    crate::pattern::MatchMode::Regexp,
+                ).map(|p| p.matches(&s)).unwrap_or(false);
+                Value::Int(if matched { 1 } else { 0 })
+            }
+
+            // ── Text encoding ──────────────────────────────────────────────────
+            "textencode" => {
+                // textencode(s) — escape TF metacharacters so the string can be
+                // safely embedded in a TF expression: % → %%, \ → \\, ; → \;
+                let s = get_str(&args, 0, name)?;
+                let mut out = String::with_capacity(s.len() * 2);
+                for c in s.chars() {
+                    match c {
+                        '%'  => out.push_str("%%"),
+                        '\\' => out.push_str("\\\\"),
+                        ';'  => out.push_str("\\;"),
+                        _    => out.push(c),
+                    }
+                }
+                Value::Str(out)
+            }
+            "textdecode" => {
+                // textdecode(s) — reverse of textencode
+                let s = get_str(&args, 0, name)?;
+                let mut out = String::with_capacity(s.len());
+                let mut chars = s.chars().peekable();
+                while let Some(c) = chars.next() {
+                    if c == '%' && chars.peek() == Some(&'%') {
+                        chars.next();
+                        out.push('%');
+                    } else if c == '\\' {
+                        match chars.next() {
+                            Some('\\') => out.push('\\'),
+                            Some(';')  => out.push(';'),
+                            Some(other) => { out.push('\\'); out.push(other); }
+                            None       => out.push('\\'),
+                        }
+                    } else {
+                        out.push(c);
+                    }
+                }
+                Value::Str(out)
+            }
+
+            // ── Path utilities ─────────────────────────────────────────────────
+            "filename" => {
+                // filename(path) → last component (like POSIX basename)
+                let s = get_str(&args, 0, name)?;
+                let base = s.trim_end_matches('/');
+                let part = base.rsplit('/').next().unwrap_or(base);
+                Value::Str(part.to_owned())
+            }
+            "dirname" => {
+                // dirname(path) → directory component
+                let s = get_str(&args, 0, name)?;
+                let base = s.trim_end_matches('/');
+                let dir = if let Some(pos) = base.rfind('/') {
+                    if pos == 0 { "/" } else { &base[..pos] }
+                } else { "." };
+                Value::Str(dir.to_owned())
+            }
+
+            // ── Stubs for runtime-only introspection ───────────────────────────
+            // These depend on event-loop state not accessible from the
+            // interpreter.  Return safe defaults so scripts don't crash.
+            "moresize"      => Value::Int(0),    // lines in more buffer
+            "cputime"       => {                  // process CPU time (seconds)
+                Value::Float(std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs_f64()).unwrap_or(0.0))
+            }
+            "kbpoint"       => Value::Int(0),    // cursor position in input line
+            "kbhead"        => Value::Str(String::new()), // text before cursor
+            "kbtail"        => Value::Str(String::new()), // text after cursor
+            "status_fields" => Value::Str(String::new()),
+            "status_width"  => Value::Int(0),
+            "status_label"  => Value::Str(String::new()),
+            "isvar" => {
+                // isvar(name) → 1 if variable exists, 0 otherwise
+                // NOTE: this runs in the interpreter without event-loop context;
+                // it can only see interpreter globals/locals, not TF system vars.
+                let vname = get_str(&args, 0, name)?;
+                // We can't easily call into the interpreter from builtins, so
+                // return 0 conservatively (scripts handle missing vars gracefully).
+                let _ = vname;
+                Value::Int(0)
+            }
+            "ismacro" => {
+                // ismacro(name) → 0 (conservative stub; no macro store access here)
+                Value::Int(0)
+            }
+            "worldname"     => Value::Str(String::new()), // active world name stub
+            "nworlds"       => Value::Int(0),              // number of worlds stub
+
             _ => return Ok(None),
         }))
     }
