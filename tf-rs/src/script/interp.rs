@@ -884,6 +884,16 @@ impl EvalContext for Interpreter {
             "echo"    => return self.builtin_echo_fn(&args),
             "prompt"  => return self.builtin_prompt_fn(&args),
             "substitute" => return self.builtin_substitute_fn(&args),
+            "isvar" => {
+                let vname = args.first().map(|v| v.to_string()).unwrap_or_default();
+                let exists = self.get_var(&vname).is_some();
+                return Ok(Value::Int(if exists { 1 } else { 0 }));
+            }
+            "ismacro" => {
+                let mname = args.first().map(|v| v.to_string()).unwrap_or_default();
+                let exists = self.macros.contains_key(&mname);
+                return Ok(Value::Int(if exists { 1 } else { 0 }));
+            }
             _ => {}
         }
 
