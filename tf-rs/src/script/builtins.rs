@@ -357,9 +357,7 @@ pub fn call_builtin(name: &str, args: Vec<Value>) -> Option<Result<Value, String
                 Value::Float(secs)
             }
 
-            "status_fields" => Value::Str(String::new()),
-            "status_width"  => Value::Int(0),
-            "status_label"  => Value::Str(String::new()),
+
             "isvar" => {
                 // isvar(name) → 1 if variable exists, 0 otherwise
                 // NOTE: this runs in the interpreter without event-loop context;

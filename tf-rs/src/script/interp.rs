@@ -845,6 +845,22 @@ impl Interpreter {
     }
 }
 
+// ── Status field spec parser ───────────────────────────────────────────────────
+
+/// Parse a `status_fields` spec string and return the nth colon-separated
+/// attribute (0=name, 1=width, 2=label/flags) for the field whose name
+/// matches `field`.  Field tokens are whitespace-separated; format is
+/// `[name][:width[:label]]`.
+fn status_field_attr(spec: &str, field: &str, attr: usize) -> Option<String> {
+    for token in spec.split_whitespace() {
+        let parts: Vec<&str> = token.splitn(3, ':').collect();
+        if parts.first().copied().unwrap_or("") == field {
+            return parts.get(attr).map(|s| s.to_string());
+        }
+    }
+    None
+}
+
 // ── EvalContext impl ──────────────────────────────────────────────────────────
 
 impl EvalContext for Interpreter {
@@ -911,6 +927,22 @@ impl EvalContext for Interpreter {
             }
             "kbtail" => {
                 return Ok(self.globals.get("kbtail").cloned().unwrap_or_default());
+            }
+            // Status field introspection — parse the %status_fields variable.
+            "status_fields" => {
+                return Ok(self.globals.get("status_fields").cloned().unwrap_or_default());
+            }
+            "status_width" => {
+                let name = args.first().map(|v| v.to_string()).unwrap_or_default();
+                let spec = self.globals.get("status_fields").map(|v| v.to_string()).unwrap_or_default();
+                let width = status_field_attr(&spec, &name, 1).and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+                return Ok(Value::Int(width));
+            }
+            "status_label" => {
+                let name = args.first().map(|v| v.to_string()).unwrap_or_default();
+                let spec = self.globals.get("status_fields").map(|v| v.to_string()).unwrap_or_default();
+                let label = status_field_attr(&spec, &name, 2).unwrap_or_default();
+                return Ok(Value::Str(label));
             }
             _ => {}
         }

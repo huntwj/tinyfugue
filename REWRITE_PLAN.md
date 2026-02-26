@@ -275,7 +275,7 @@ These features are recognized as missing but not yet scheduled:
 - ✓ `kbpoint()` / `kbhead()` / `kbtail()` — synced from `LineEditor` into interpreter globals after every keystroke; returns cursor char-offset, text before cursor, text after cursor
 - ✓ `moresize()` — synced from `Screen::scrollback()` in `refresh_display()`; returns lines above current view
 - ✓ `cputime()` — real process CPU time (user + system) via `libc::getrusage(RUSAGE_SELF)`
-- ✓ Stubs: `status_fields`, `status_width`, `status_label`
+- ✓ `status_fields()` — returns `%status_fields` interpreter global; `status_width(name)` / `status_label(name)` parse the field spec string (`name:width:label` tokens) to extract per-field attributes
 - ✓ `worldname()` / `nworlds()` — `update_status()` syncs `active_world` name and `handles.len()` into interpreter globals `worldname`/`nworlds` on every world-state change; `call_fn` reads them back so scripts always see live values
 
 ### Startup
