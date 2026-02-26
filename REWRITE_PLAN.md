@@ -283,7 +283,7 @@ grouped by impact so the highest-value work is obvious at a glance.
 - `/unworld name` — remove a world definition from `WorldStore`
 - ✓ `/listvar [pattern]` — lists globals sorted alphabetically; optional substring filter; no event-loop round-trip needed
 - `/histsize n` — set scrollback buffer depth at runtime
-- `/version` — print binary version string; scripts check `%version`
+- ✓ `/version` — prints version string; `%version` global set at startup from `CARGO_PKG_VERSION`
 
 #### Functions
 - `fg_world()` — `tfstatus.tf` uses `fg_world() =~ ""` to detect no active world;

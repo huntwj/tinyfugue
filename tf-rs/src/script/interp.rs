@@ -709,6 +709,15 @@ impl Interpreter {
             // config files that contain them don't produce errors.
             "visual" | "mode" | "redraw" | "localecho" => Ok(None),
 
+            "version" => {
+                self.output.push(format!(
+                    "% TinyFugue (Rust) version {}",
+                    env!("CARGO_PKG_VERSION"),
+                ));
+                self.output.push("% Copyright (C) 1993-2007 Ken Keys".to_owned());
+                Ok(None)
+            }
+
             "beep" => {
                 self.actions.push(ScriptAction::Bell);
                 Ok(None)

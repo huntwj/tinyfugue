@@ -20,6 +20,11 @@ async fn main() {
 
     let mut event_loop = EventLoop::new();
 
+    // ── Set built-in interpreter globals ──────────────────────────────────────
+    event_loop
+        .interp
+        .set_global_var("version", Value::Str(env!("CARGO_PKG_VERSION").to_owned()));
+
     // ── Set TFLIBDIR in the interpreter ───────────────────────────────────────
     let libdir = cli::resolve_libdir(args.libdir.as_ref());
     event_loop
