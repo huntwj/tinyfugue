@@ -250,7 +250,7 @@ These features are recognized as missing but not yet scheduled:
 - `/saveworld [-w world] [file]` — ✓ `World::to_addworld()` serializes to `/addworld` command syntax; writes to file or prints to screen
 - `/beep` — ✓ writes `\x07` to stdout via `ScriptAction::Bell`
 - `/visual`, `/mode`, `/redraw` — ✓ explicit no-op stubs; binary always runs in visual mode
-- `/input` — inject text into the input line
+- `/input` — ✓ `ScriptAction::SetInput` calls `LineEditor::set_text()`; buffer ready for next Enter
 - `/status` — configure status line field format
 - `/setenv name=value` — ✓ calls `std::env::set_var`
 

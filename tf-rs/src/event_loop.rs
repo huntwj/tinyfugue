@@ -246,6 +246,10 @@ pub struct EventLoop {
 
     /// Open log file (mirrors `/log path`).
     log_file: Option<std::fs::File>,
+
+    /// Format string for the status bar.  Tokens: `%world`, `%T` (HH:MM),
+    /// `%t` (HH:MM:SS).  Defaults to `"[ %world ]  %T"`.
+    status_format: String,
 }
 
 impl EventLoop {
@@ -275,6 +279,7 @@ impl EventLoop {
             quit: false,
             mail_path: None,
             mail_next: Instant::now() + MAIL_CHECK_INTERVAL,
+            status_format: "[ %world ]  %T".to_owned(),
             need_refresh: false,
             log_file: None,
         }
@@ -731,6 +736,12 @@ impl EventLoop {
                 self.input.editor.set_text(&text);
                 self.need_refresh = true;
             }
+
+            ScriptAction::SetStatus(fmt) => {
+                self.status_format = fmt;
+                self.update_status();
+                self.need_refresh = true;
+            }
         }
     }
 
@@ -997,18 +1008,25 @@ impl EventLoop {
 
     // ── Display ───────────────────────────────────────────────────────────
 
-    /// Rebuild the status bar from the current active world and time.
+    /// Rebuild the status bar by evaluating `status_format` tokens.
+    ///
+    /// Supported tokens: `%world` (active world name), `%T` (HH:MM),
+    /// `%t` (HH:MM:SS).
     fn update_status(&mut self) {
         use std::time::{SystemTime, UNIX_EPOCH};
-        let world = self.active_world.as_deref().unwrap_or("(no world)");
-        // Simple HH:MM clock from system time.
+        let world = self.active_world.as_deref().unwrap_or("(no world)").to_owned();
         let secs = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
         let hh = (secs % 86400) / 3600;
         let mm = (secs % 3600) / 60;
-        self.status = StatusLine::new(format!("[ {world} ]  {hh:02}:{mm:02}"));
+        let ss = secs % 60;
+        let text = self.status_format
+            .replace("%world", &world)
+            .replace("%T", &format!("{hh:02}:{mm:02}"))
+            .replace("%t", &format!("{hh:02}:{mm:02}:{ss:02}"));
+        self.status = StatusLine::new(text);
     }
 
     /// Render the screen and status bar, then flush.

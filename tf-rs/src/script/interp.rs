@@ -79,6 +79,9 @@ pub enum ScriptAction {
     Bell,
     /// Pre-fill the input buffer with `text` (`/input text`).
     SetInput(String),
+    /// Set the status bar format string (`/status [format]`).
+    /// Tokens: `%world` (active world), `%T` (HH:MM), `%t` (HH:MM:SS).
+    SetStatus(String),
     /// Delete macros whose name matches `pattern`, or all anonymous macros
     /// when `pattern` is `None` (`/purge [pattern]`).
     PurgeMacros(Option<String>),
@@ -661,6 +664,19 @@ impl Interpreter {
             "input" => {
                 let expanded = expand(args, self)?;
                 self.actions.push(ScriptAction::SetInput(expanded));
+                Ok(None)
+            }
+
+            "status" => {
+                // /status [format]  — set the status bar format string.
+                // Silently no-op when called with sub-command flags from
+                // tfstatus.tf macros (status_add, status_rm, etc.) — those
+                // are dispatched as macros, not as the /status built-in.
+                let expanded = expand(args, self)?;
+                let s = expanded.trim();
+                if !s.is_empty() && !s.starts_with('-') {
+                    self.actions.push(ScriptAction::SetStatus(s.to_owned()));
+                }
                 Ok(None)
             }
 
