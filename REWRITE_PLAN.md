@@ -280,9 +280,9 @@ grouped by impact so the highest-value work is obvious at a glance.
 - ✓ `/ps` — lists active processes with PID, type, interval, remaining runs, and description
 - ✓ `/kill pid` — removes a process by ID; prints confirmation or "no such process"
 - ✓ `/save [file]` — serializes all non-invisible macros as `/def` commands via `Macro::to_def_command()`; writes to file or prints to screen
-- `/unworld name` — remove a world definition from `WorldStore`
+- ✓ `/unworld name` — removes world from `WorldStore`; prints confirmation or error
 - ✓ `/listvar [pattern]` — lists globals sorted alphabetically; optional substring filter; no event-loop round-trip needed
-- `/histsize n` — set scrollback buffer depth at runtime
+- ✓ `/histsize n` — sets `Screen::max_lines` at runtime
 - ✓ `/version` — prints version string; `%version` global set at startup from `CARGO_PKG_VERSION`
 
 #### Functions

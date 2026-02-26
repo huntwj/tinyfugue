@@ -96,6 +96,10 @@ pub enum ScriptAction {
     Recall(Option<usize>),
     /// Write all macros to a file (or stdout) in `/def` form (`/save [file]`).
     SaveMacros { path: Option<String> },
+    /// Remove a world definition by name (`/unworld name`).
+    UnWorld(String),
+    /// Set the scrollback buffer depth (`/histsize n`).
+    SetHistSize(usize),
     /// List all active scheduled processes (`/ps`).
     ListProcesses,
     /// Kill a scheduled process by ID (`/kill id`).
@@ -665,6 +669,31 @@ impl Interpreter {
             }
 
             // ── Miscellaneous ─────────────────────────────────────────────────
+            "unworld" => {
+                let expanded = expand(args, self)?;
+                let name = expanded.trim().to_owned();
+                if name.is_empty() {
+                    self.output.push("% /unworld: world name required".to_owned());
+                } else {
+                    self.actions.push(ScriptAction::UnWorld(name));
+                }
+                Ok(None)
+            }
+
+            "histsize" => {
+                let expanded = expand(args, self)?;
+                let s = expanded.trim();
+                match s.parse::<usize>() {
+                    Ok(n) if n > 0 => {
+                        self.actions.push(ScriptAction::SetHistSize(n));
+                    }
+                    _ => {
+                        self.output.push(format!("% /histsize: expected positive integer, got '{s}'"));
+                    }
+                }
+                Ok(None)
+            }
+
             "save" => {
                 let expanded = expand(args, self)?;
                 let s = expanded.trim();

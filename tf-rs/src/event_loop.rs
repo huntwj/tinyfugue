@@ -819,6 +819,24 @@ impl EventLoop {
                 self.need_refresh = true;
             }
 
+            ScriptAction::UnWorld(name) => {
+                if self.worlds.remove(&name) {
+                    let msg = format!("% World '{name}' removed.");
+                    self.screen.push_line(LogicalLine::plain(&msg));
+                } else {
+                    let msg = format!("% /unworld: no world named '{name}'.");
+                    self.screen.push_line(LogicalLine::plain(&msg));
+                }
+                self.need_refresh = true;
+            }
+
+            ScriptAction::SetHistSize(n) => {
+                self.screen.max_lines = n;
+                let msg = format!("% History size set to {n}.");
+                self.screen.push_line(LogicalLine::plain(&msg));
+                self.need_refresh = true;
+            }
+
             ScriptAction::SaveMacros { path } => {
                 let lines: Vec<String> = self.macro_store.iter()
                     .filter(|m| !m.invisible)
