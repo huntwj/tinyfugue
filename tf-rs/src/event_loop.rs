@@ -726,6 +726,11 @@ impl EventLoop {
                 self.screen.push_line(LogicalLine::plain(&msg));
                 self.need_refresh = true;
             }
+
+            ScriptAction::SetInput(text) => {
+                self.input.editor.set_text(&text);
+                self.need_refresh = true;
+            }
         }
     }
 

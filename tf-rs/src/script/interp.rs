@@ -77,6 +77,8 @@ pub enum ScriptAction {
     // ── Miscellaneous ──────────────────────────────────────────────────────
     /// Ring the terminal bell (`/beep`).
     Bell,
+    /// Pre-fill the input buffer with `text` (`/input text`).
+    SetInput(String),
     /// Delete macros whose name matches `pattern`, or all anonymous macros
     /// when `pattern` is `None` (`/purge [pattern]`).
     PurgeMacros(Option<String>),
@@ -653,6 +655,12 @@ impl Interpreter {
                 let s = expanded.trim();
                 let pattern = if s.is_empty() { None } else { Some(s.to_owned()) };
                 self.actions.push(ScriptAction::PurgeMacros(pattern));
+                Ok(None)
+            }
+
+            "input" => {
+                let expanded = expand(args, self)?;
+                self.actions.push(ScriptAction::SetInput(expanded));
                 Ok(None)
             }
 

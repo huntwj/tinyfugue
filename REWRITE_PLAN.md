@@ -259,7 +259,7 @@ These features are recognized as missing but not yet scheduled:
 - Status line supports only `(world) time`; custom field format strings are parsed but not evaluated
 
 ### Networking
-- ATCP / GMCP telnet option extensions are negotiated but payloads are not passed to hooks
+- ✓ ATCP / GMCP telnet payloads now routed to `Hook::Atcp` / `Hook::Gmcp`; `Hook` enum extended to 34 variants
 - MCP (MUD Client Protocol) not implemented
 
 ### Scripting
