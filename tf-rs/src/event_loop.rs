@@ -1083,6 +1083,8 @@ impl EventLoop {
     fn refresh_display(&mut self) {
         self.update_status();
         self.sync_kb_globals();
+        let scrollback = self.screen.scrollback();
+        self.interp.set_global_var("moresize", crate::script::Value::Int(scrollback as i64));
         let status = self.status.clone();
         let _ = self.terminal.render_screen(&self.screen);
         let _ = self.terminal.render_status(std::slice::from_ref(&status));

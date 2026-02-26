@@ -343,7 +343,7 @@ pub fn call_builtin(name: &str, args: Vec<Value>) -> Option<Result<Value, String
             // ── Stubs for runtime-only introspection ───────────────────────────
             // These depend on event-loop state not accessible from the
             // interpreter.  Return safe defaults so scripts don't crash.
-            "moresize"      => Value::Int(0),    // lines in more buffer
+
             "cputime"       => {                  // process CPU time (seconds)
                 Value::Float(std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)

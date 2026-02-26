@@ -900,6 +900,9 @@ impl EvalContext for Interpreter {
             "nworlds" => {
                 return Ok(self.globals.get("nworlds").cloned().unwrap_or(Value::Int(0)));
             }
+            "moresize" => {
+                return Ok(self.globals.get("moresize").cloned().unwrap_or(Value::Int(0)));
+            }
             "kbpoint" => {
                 return Ok(self.globals.get("kbpoint").cloned().unwrap_or(Value::Int(0)));
             }
