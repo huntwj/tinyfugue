@@ -819,6 +819,38 @@ impl EventLoop {
                 self.need_refresh = true;
             }
 
+            ScriptAction::SaveMacros { path } => {
+                let lines: Vec<String> = self.macro_store.iter()
+                    .filter(|m| !m.invisible)
+                    .map(|m| m.to_def_command())
+                    .collect();
+                match path {
+                    None => {
+                        // No file — print to screen.
+                        for line in &lines {
+                            self.screen.push_line(LogicalLine::plain(line));
+                        }
+                    }
+                    Some(p) => {
+                        use std::io::Write;
+                        match std::fs::File::create(&p) {
+                            Ok(mut f) => {
+                                for line in &lines {
+                                    let _ = writeln!(f, "{line}");
+                                }
+                                let msg = format!("% Saved {} macro(s) to {p}.", lines.len());
+                                self.screen.push_line(LogicalLine::plain(&msg));
+                            }
+                            Err(e) => {
+                                let msg = format!("% /save: {p}: {e}");
+                                self.screen.push_line(LogicalLine::plain(&msg));
+                            }
+                        }
+                    }
+                }
+                self.need_refresh = true;
+            }
+
             ScriptAction::ListProcesses => {
                 let procs: Vec<_> = self.scheduler.iter().collect();
                 if procs.is_empty() {

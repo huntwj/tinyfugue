@@ -54,6 +54,24 @@ impl Attr {
 
     // ── Inspection ────────────────────────────────────────────────────────
 
+    /// Returns `true` if no attribute bits are set.
+    #[inline]
+    pub fn is_empty(self) -> bool {
+        self == Self::EMPTY
+    }
+
+    /// Serialize to a TF `-a` flag string (e.g. `"bug"` for bold+underline+gag).
+    pub fn to_tf_flag(self) -> String {
+        let mut s = String::new();
+        if self.contains(Self::BOLD)      { s.push('b'); }
+        if self.contains(Self::UNDERLINE) { s.push('u'); }
+        if self.contains(Self::REVERSE)   { s.push('r'); }
+        if self.contains(Self::ITALIC)    { s.push('i'); }
+        if self.contains(Self::HILITE)    { s.push('h'); }
+        if self.contains(Self::GAG)       { s.push('g'); }
+        s
+    }
+
     /// Returns `true` if all bits in `other` are set in `self`.
     #[inline]
     pub fn contains(self, other: Self) -> bool {

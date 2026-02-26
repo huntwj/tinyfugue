@@ -279,7 +279,7 @@ grouped by impact so the highest-value work is obvious at a glance.
 - ✓ `/recall [n]` — displays last N (or all) input history entries oldest-first with `[N] text` numbering
 - ✓ `/ps` — lists active processes with PID, type, interval, remaining runs, and description
 - ✓ `/kill pid` — removes a process by ID; prints confirmation or "no such process"
-- `/save [file]` — write current macro/trigger set to a `.tf` file; important for persistence
+- ✓ `/save [file]` — serializes all non-invisible macros as `/def` commands via `Macro::to_def_command()`; writes to file or prints to screen
 - `/unworld name` — remove a world definition from `WorldStore`
 - `/listvar [pattern]` — list interpreter globals; debugging staple
 - `/histsize n` — set scrollback buffer depth at runtime

@@ -118,6 +118,100 @@ impl Default for Macro {
     }
 }
 
+impl Macro {
+    /// Serialize to a `/def` command string suitable for reloading with `/load`.
+    pub fn to_def_command(&self) -> String {
+        use crate::pattern::MatchMode;
+        use crate::hook::Hook;
+
+        let mut flags = String::new();
+
+        // Name
+        if let Some(name) = &self.name {
+            flags.push_str(&format!(" {name}"));
+        }
+
+        // Invisible
+        if self.invisible { flags.push_str(" -i"); }
+
+        // Priority (only emit when non-default)
+        if self.priority != 1 {
+            flags.push_str(&format!(" -p{}", self.priority));
+        }
+
+        // Shots
+        if self.shots > 0 {
+            flags.push_str(&format!(" -n{}", self.shots));
+        }
+
+        // Probability
+        if self.probability != 100 {
+            flags.push_str(&format!(" -P{}", self.probability));
+        }
+
+        // Fall-through
+        if self.fallthru { flags.push_str(" -f"); }
+
+        // Quiet
+        if self.quiet { flags.push_str(" -q"); }
+
+        // Attributes / gag
+        if !self.attr.is_empty() {
+            flags.push_str(&format!(" -a{}", self.attr.to_tf_flag()));
+        }
+
+        // Key binding
+        if let Some(key) = &self.bind {
+            flags.push_str(&format!(" -b'{key}'"));
+        } else if let Some(kn) = &self.keyname {
+            flags.push_str(&format!(" -B'{kn}'"));
+        }
+
+        // World scope
+        if let Some(w) = &self.world {
+            flags.push_str(&format!(" -w{w}"));
+        }
+
+        // World type
+        if let Some(p) = &self.wtype {
+            flags.push_str(&format!(" -T'{}'", p.src()));
+        }
+
+        // Hooks
+        if !self.hooks.is_empty() {
+            let names: Vec<&str> = Hook::ALL.iter()
+                .filter(|&&h| self.hooks.contains(h))
+                .map(|h| h.name())
+                .collect();
+            let hspec = if let Some(p) = &self.hargs {
+                format!(" -h'{} {}'", names.join("|"), p.src())
+            } else {
+                format!(" -h'{}'", names.join("|"))
+            };
+            flags.push_str(&hspec);
+        }
+
+        // Guard expression
+        if let Some(expr) = &self.expr {
+            flags.push_str(&format!(" -E'{expr}'"));
+        }
+
+        // Trigger pattern
+        if let Some(trig) = &self.trig {
+            let mode_flag = match trig.mode() {
+                MatchMode::Regexp => "-mregexp",
+                MatchMode::Glob   => "-mglob",
+                MatchMode::Simple => "-msimple",
+                MatchMode::Substr => "-msubstr",
+            };
+            flags.push_str(&format!(" {mode_flag} -t'{}'", trig.src()));
+        }
+
+        let body = self.body.as_deref().unwrap_or("");
+        format!("/def{flags} = {body}")
+    }
+}
+
 // ── TriggerAction ─────────────────────────────────────────────────────────────
 
 /// The outcome produced by a macro that fired against a line of text or a hook.

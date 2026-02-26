@@ -94,6 +94,8 @@ pub enum ScriptAction {
     /// Display the last `n` input history entries on screen (`/recall [n]`).
     /// `None` means show all.
     Recall(Option<usize>),
+    /// Write all macros to a file (or stdout) in `/def` form (`/save [file]`).
+    SaveMacros { path: Option<String> },
     /// List all active scheduled processes (`/ps`).
     ListProcesses,
     /// Kill a scheduled process by ID (`/kill id`).
@@ -646,6 +648,14 @@ impl Interpreter {
             }
 
             // ── Miscellaneous ─────────────────────────────────────────────────
+            "save" => {
+                let expanded = expand(args, self)?;
+                let s = expanded.trim();
+                let path = if s.is_empty() { None } else { Some(s.to_owned()) };
+                self.actions.push(ScriptAction::SaveMacros { path });
+                Ok(None)
+            }
+
             "saveworld" => {
                 // /saveworld [-w <world>] [<file>]
                 // Flags: -w <name> restricts to one world.
