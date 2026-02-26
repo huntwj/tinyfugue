@@ -91,6 +91,9 @@ pub enum ScriptAction {
     ShellCmd(String),
     /// Spawn an interactive shell, temporarily leaving raw mode (`/sh` with no args).
     ShellInteractive,
+    /// Display the last `n` input history entries on screen (`/recall [n]`).
+    /// `None` means show all.
+    Recall(Option<usize>),
 
     // ── Lua scripting (requires the `lua` Cargo feature) ──────────────────
     /// Load and execute a Lua source file (`/loadlua path`).
@@ -687,6 +690,26 @@ impl Interpreter {
                 } else {
                     self.actions.push(ScriptAction::ShellCmd(cmd.to_owned()));
                 }
+                Ok(None)
+            }
+
+            "recall" => {
+                let n = {
+                    let s = expand(args, self)?;
+                    let t = s.trim();
+                    if t.is_empty() {
+                        None
+                    } else {
+                        match t.parse::<usize>() {
+                            Ok(n) => Some(n),
+                            Err(_) => {
+                                self.output.push(format!("% /recall: invalid count '{t}'"));
+                                return Ok(None);
+                            }
+                        }
+                    }
+                };
+                self.actions.push(ScriptAction::Recall(n));
                 Ok(None)
             }
 

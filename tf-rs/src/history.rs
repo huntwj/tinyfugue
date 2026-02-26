@@ -67,6 +67,11 @@ impl InputHistory {
         self.entries.is_empty()
     }
 
+    /// Iterate entries oldest-first (for display via `/recall`).
+    pub fn iter_oldest_first(&self) -> impl Iterator<Item = &str> {
+        self.entries.iter().rev().map(|s| s.as_str())
+    }
+
     // ── Recording ─────────────────────────────────────────────────────────────
 
     /// Record `line` as the most recent input.

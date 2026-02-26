@@ -276,7 +276,7 @@ grouped by impact so the highest-value work is obvious at a glance.
 #### Commands
 - ✓ `/sh [command]` — `sh -c <cmd>` output displayed on TF screen; bare `/sh` drops to `$SHELL` (leaves raw mode, waits, repaints)
 - ✓ `/lcd [dir]` — `set_current_dir`; bare `/lcd` goes to `$HOME`; `~` prefix expanded; prints new cwd or error
-- `/recall [n]` — replay the last N input lines to screen; widely used
+- ✓ `/recall [n]` — displays last N (or all) input history entries oldest-first with `[N] text` numbering
 - `/ps` — list running `/repeat` and `/quote` processes; essential for debugging
 - `/kill pid` — terminate a process by ID; complement to `/ps`
 - `/save [file]` — write current macro/trigger set to a `.tf` file; important for persistence

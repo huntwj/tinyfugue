@@ -805,6 +805,19 @@ impl EventLoop {
                 crossterm::terminal::enable_raw_mode().ok();
                 self.need_refresh = true;
             }
+
+            ScriptAction::Recall(n) => {
+                let entries: Vec<String> = self.input.history.iter_oldest_first()
+                    .map(|s| s.to_owned())
+                    .collect();
+                let total = entries.len();
+                let skip = n.map(|n| total.saturating_sub(n)).unwrap_or(0);
+                for (i, entry) in entries.iter().enumerate().skip(skip) {
+                    let line = format!("[{}] {}", i + 1, entry);
+                    self.screen.push_line(LogicalLine::plain(&line));
+                }
+                self.need_refresh = true;
+            }
         }
     }
 
