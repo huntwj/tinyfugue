@@ -428,6 +428,7 @@ impl EventLoop {
                             } else {
                                 // No output — just redraw the (possibly cleared)
                                 // input line so the user sees their typing.
+                                self.sync_kb_globals();
                                 let text = self.input.editor.text();
                                 let pos  = self.input.editor.pos;
                                 let _ = self.terminal.render_input(&text, pos);
@@ -1064,9 +1065,24 @@ impl EventLoop {
         self.status = StatusLine::new(text);
     }
 
+    /// Sync keyboard-state interpreter globals: `kbpoint`, `kbhead`, `kbtail`.
+    fn sync_kb_globals(&mut self) {
+        use crate::script::Value;
+        let pos = self.input.editor.pos;
+        let text = self.input.editor.text();
+        let (head, tail): (String, String) = {
+            let chars: Vec<char> = text.chars().collect();
+            (chars[..pos].iter().collect(), chars[pos..].iter().collect())
+        };
+        self.interp.set_global_var("kbpoint", Value::Int(pos as i64));
+        self.interp.set_global_var("kbhead",  Value::Str(head));
+        self.interp.set_global_var("kbtail",  Value::Str(tail));
+    }
+
     /// Render the screen, status bar, and input line, then flush.
     fn refresh_display(&mut self) {
         self.update_status();
+        self.sync_kb_globals();
         let status = self.status.clone();
         let _ = self.terminal.render_screen(&self.screen);
         let _ = self.terminal.render_status(std::slice::from_ref(&status));

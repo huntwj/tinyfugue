@@ -349,9 +349,7 @@ pub fn call_builtin(name: &str, args: Vec<Value>) -> Option<Result<Value, String
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_secs_f64()).unwrap_or(0.0))
             }
-            "kbpoint"       => Value::Int(0),    // cursor position in input line
-            "kbhead"        => Value::Str(String::new()), // text before cursor
-            "kbtail"        => Value::Str(String::new()), // text after cursor
+
             "status_fields" => Value::Str(String::new()),
             "status_width"  => Value::Int(0),
             "status_label"  => Value::Str(String::new()),
