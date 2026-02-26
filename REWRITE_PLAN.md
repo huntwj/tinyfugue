@@ -257,6 +257,7 @@ These features are recognized as missing but not yet scheduled:
 ### Display
 - `@{...}` TF attribute sequences — ✓ `TfStr::from_tf_markup()` parses all spec codes (bold, underline, italic, reverse, named colors, `rgbXYZ` mapped to nearest 16-color) and strips them from visible text; script/macro output now renders colors correctly
 - ✓ Status line format is user-settable via `/status <format>`; `%world`/`%T`/`%t` tokens evaluated; full `tfstatus.tf` field system (named fields, widths, `@clock`) not implemented
+- ✓ Raw mode enabled at `EventLoop::run()` start; `Terminal::render_input()` draws the input buffer at the bottom row with correct cursor placement; input re-rendered after every keystroke batch and on every screen refresh
 
 ### Networking
 - ✓ ATCP / GMCP telnet payloads now routed to `Hook::Atcp` / `Hook::Gmcp`; `Hook` enum extended to 34 variants

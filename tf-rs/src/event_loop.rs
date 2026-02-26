@@ -420,12 +420,19 @@ impl EventLoop {
                                     }
                                 }
                             }
-                            // Render the updated input line after every keystroke
-                            // batch so the user sees their typing immediately.
-                            let text = self.input.editor.text();
-                            let pos  = self.input.editor.pos;
-                            let _ = self.terminal.render_input(&text, pos);
-                            let _ = self.terminal.flush();
+                            // If the command produced output, do a full refresh
+                            // immediately rather than waiting for the timer tick.
+                            if self.need_refresh {
+                                self.refresh_display();
+                                self.need_refresh = false;
+                            } else {
+                                // No output — just redraw the (possibly cleared)
+                                // input line so the user sees their typing.
+                                let text = self.input.editor.text();
+                                let pos  = self.input.editor.pos;
+                                let _ = self.terminal.render_input(&text, pos);
+                                let _ = self.terminal.flush();
+                            }
                         }
                     }
                 }
@@ -888,10 +895,12 @@ impl EventLoop {
                 if let Err(e) = self.interp.exec_script(&body) {
                     let msg = format!("% Hook error: {e}");
                     self.screen.push_line(LogicalLine::plain(&msg));
+                    self.need_refresh = true;
                 }
                 for line in self.interp.output.drain(..) {
                     let content = crate::tfstr::TfStr::from_tf_markup(&line);
                     self.screen.push_line(LogicalLine::new(content, Attr::EMPTY));
+                    self.need_refresh = true;
                 }
                 // Drain simple actions (AddWorld, DefMacro) but skip
                 // Connect/Disconnect to avoid re-entrancy.

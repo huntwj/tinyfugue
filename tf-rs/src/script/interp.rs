@@ -626,11 +626,21 @@ impl Interpreter {
                 Ok(None)
             }
 
+            // ── Variable management ───────────────────────────────────────────
+            "unset" => {
+                // /unset varname  — remove a global variable.
+                let expanded = expand(args, self)?;
+                for name in expanded.split_whitespace() {
+                    self.globals.remove(name);
+                }
+                Ok(None)
+            }
+
             // ── Display-mode stubs ────────────────────────────────────────────
             // The Rust binary always runs in visual (full-screen) mode.
             // /visual and /mode are accepted and silently succeed so that
             // config files that contain them don't produce errors.
-            "visual" | "mode" | "redraw" => Ok(None),
+            "visual" | "mode" | "redraw" | "localecho" => Ok(None),
 
             "beep" => {
                 self.actions.push(ScriptAction::Bell);
