@@ -508,12 +508,39 @@ impl Interpreter {
 
             // ── Echo / output ──────────────────────────────────────────────────
             "echo" => {
-                let (no_nl, rest) =
-                    if let Some(s) = args.strip_prefix("-n ").or_else(|| args.strip_prefix("-n\t")) {
-                        (true, s)
+                // Strip known flags: -n (no newline), -e (error stream),
+                // -p (prompt), -A (activity), -w world, -r (raw/no-expand),
+                // -s (silent).  Unrecognised flags are left in the text.
+                let mut rest = args;
+                let mut no_nl  = false;
+                let mut silent = false;
+                loop {
+                    rest = rest.trim_start();
+                    if rest.starts_with("-n") && rest[2..].starts_with(|c: char| c.is_whitespace() || c == '-') {
+                        no_nl = true;
+                        rest = &rest[2..];
+                    } else if rest.starts_with("-s") && rest[2..].starts_with(|c: char| c.is_whitespace() || c == '-') {
+                        silent = true;
+                        rest = &rest[2..];
+                    } else if rest.starts_with("-e") && rest[2..].starts_with(|c: char| c.is_whitespace() || c == '-') {
+                        rest = &rest[2..]; // error stream → normal output
+                    } else if rest.starts_with("-p") && rest[2..].starts_with(|c: char| c.is_whitespace() || c == '-') {
+                        rest = &rest[2..]; // prompt → normal output
+                    } else if rest.starts_with("-A") && rest[2..].starts_with(|c: char| c.is_whitespace() || c == '-') {
+                        rest = &rest[2..]; // activity → ignored
+                    } else if rest.starts_with("-r") && rest[2..].starts_with(|c: char| c.is_whitespace() || c == '-') {
+                        rest = &rest[2..]; // raw — TODO: skip expansion
+                    } else if let Some(r) = rest.strip_prefix("-w") {
+                        // -w worldname: skip the world name token
+                        let r = r.trim_start();
+                        rest = r.splitn(2, char::is_whitespace).nth(1).unwrap_or("");
                     } else {
-                        (false, args)
-                    };
+                        break;
+                    }
+                }
+                if silent {
+                    return Ok(None);
+                }
                 let expanded = expand(rest, self)?;
                 if no_nl {
                     if let Some(last) = self.output.last_mut() {
