@@ -263,7 +263,7 @@ These features are recognized as missing but not yet scheduled:
 - MCP (MUD Client Protocol) not implemented
 
 ### Scripting
-- `mktime(str)` parses nothing; returns current time
+- `mktime(str)` — ✓ parses `YYYY-MM-DD HH:MM:SS`, `YYYY/MM/DD HH:MM:SS`, `HH:MM:SS`, and bare integers; roundtrips with `ftime`
 
 ### Startup
 - ✓ Bare `tf` invocation with no default world now starts idle cleanly

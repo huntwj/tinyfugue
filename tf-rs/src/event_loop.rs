@@ -828,10 +828,11 @@ impl EventLoop {
             }
             NetEvent::Gmcp(module, payload) => {
                 let arg = format!("{module} {payload}");
-                self.fire_hook(Hook::Activity, &arg).await;
+                self.fire_hook(Hook::Gmcp, &arg).await;
             }
             NetEvent::Atcp(func, val) => {
-                let _ = (func, val);
+                let arg = format!("{func} {val}");
+                self.fire_hook(Hook::Atcp, &arg).await;
             }
             NetEvent::Closed => {
                 let was_active = self.active_world.as_deref() == Some(&msg.world);
