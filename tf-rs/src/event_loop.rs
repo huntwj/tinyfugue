@@ -772,6 +772,39 @@ impl EventLoop {
                 let _ = self.input.apply(action);
                 self.need_refresh = true;
             }
+
+            ScriptAction::ShellCmd(cmd) => {
+                // Run `sh -c <cmd>`, display stdout+stderr on the TF screen.
+                let result = tokio::process::Command::new("sh")
+                    .arg("-c")
+                    .arg(&cmd)
+                    .output()
+                    .await;
+                match result {
+                    Ok(out) => {
+                        let combined = [out.stdout.as_slice(), out.stderr.as_slice()].concat();
+                        let text = String::from_utf8_lossy(&combined);
+                        for line in text.lines() {
+                            self.screen.push_line(LogicalLine::plain(line));
+                        }
+                    }
+                    Err(e) => {
+                        let msg = format!("% /sh: {e}");
+                        self.screen.push_line(LogicalLine::plain(&msg));
+                    }
+                }
+                self.need_refresh = true;
+            }
+
+            ScriptAction::ShellInteractive => {
+                // Drop to an interactive shell: leave raw mode, run $SHELL,
+                // re-enter raw mode and repaint when it exits.
+                let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_owned());
+                crossterm::terminal::disable_raw_mode().ok();
+                let _ = std::process::Command::new(&shell).status();
+                crossterm::terminal::enable_raw_mode().ok();
+                self.need_refresh = true;
+            }
         }
     }
 

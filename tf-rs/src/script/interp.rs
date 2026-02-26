@@ -87,6 +87,10 @@ pub enum ScriptAction {
     /// Delete macros whose name matches `pattern`, or all anonymous macros
     /// when `pattern` is `None` (`/purge [pattern]`).
     PurgeMacros(Option<String>),
+    /// Run `sh -c <cmd>` and display stdout/stderr on the TF screen (`/sh cmd`).
+    ShellCmd(String),
+    /// Spawn an interactive shell, temporarily leaving raw mode (`/sh` with no args).
+    ShellInteractive,
 
     // ── Lua scripting (requires the `lua` Cargo feature) ──────────────────
     /// Load and execute a Lua source file (`/loadlua path`).
@@ -673,6 +677,16 @@ impl Interpreter {
 
             "beep" => {
                 self.actions.push(ScriptAction::Bell);
+                Ok(None)
+            }
+
+            "sh" => {
+                let cmd = args.trim();
+                if cmd.is_empty() {
+                    self.actions.push(ScriptAction::ShellInteractive);
+                } else {
+                    self.actions.push(ScriptAction::ShellCmd(cmd.to_owned()));
+                }
                 Ok(None)
             }
 

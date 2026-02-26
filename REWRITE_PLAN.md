@@ -274,7 +274,7 @@ grouped by impact so the highest-value work is obvious at a glance.
 ### High impact — missing, commonly needed in daily use
 
 #### Commands
-- `/sh [command]` — run a shell command; `^[!` binding in `stdlib.tf` is dead without it
+- ✓ `/sh [command]` — `sh -c <cmd>` output displayed on TF screen; bare `/sh` drops to `$SHELL` (leaves raw mode, waits, repaints)
 - `/lcd [dir]` — change local working directory; used in file-path scripts
 - `/recall [n]` — replay the last N input lines to screen; widely used
 - `/ps` — list running `/repeat` and `/quote` processes; essential for debugging
