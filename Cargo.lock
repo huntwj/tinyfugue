@@ -1229,6 +1229,7 @@ dependencies = [
  "criterion",
  "crossterm",
  "flate2",
+ "libc",
  "mlua",
  "proptest",
  "pyo3",

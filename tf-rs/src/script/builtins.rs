@@ -5,6 +5,7 @@
 //! interpreter's `call_fn` implementation.
 
 use super::value::Value;
+use libc;
 
 /// Dispatch a built-in function call.
 ///
@@ -345,9 +346,15 @@ pub fn call_builtin(name: &str, args: Vec<Value>) -> Option<Result<Value, String
             // interpreter.  Return safe defaults so scripts don't crash.
 
             "cputime"       => {                  // process CPU time (seconds)
-                Value::Float(std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs_f64()).unwrap_or(0.0))
+                let secs = unsafe {
+                    let mut ru = std::mem::zeroed::<libc::rusage>();
+                    libc::getrusage(libc::RUSAGE_SELF, &mut ru);
+                    ru.ru_utime.tv_sec as f64
+                        + ru.ru_utime.tv_usec as f64 / 1_000_000.0
+                        + ru.ru_stime.tv_sec as f64
+                        + ru.ru_stime.tv_usec as f64 / 1_000_000.0
+                };
+                Value::Float(secs)
             }
 
             "status_fields" => Value::Str(String::new()),
