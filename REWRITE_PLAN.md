@@ -264,7 +264,15 @@ These features are recognized as missing but not yet scheduled:
 - MCP (MUD Client Protocol) not implemented
 
 ### Scripting
-- `mktime(str)` — ✓ parses `YYYY-MM-DD HH:MM:SS`, `YYYY/MM/DD HH:MM:SS`, `HH:MM:SS`, and bare integers; roundtrips with `ftime`
+- ✓ `mktime(str)` — parses `YYYY-MM-DD HH:MM:SS`, `YYYY/MM/DD HH:MM:SS`, `HH:MM:SS`, and bare integers; roundtrips with `ftime`
+- ✓ `/echo` flag stripping — `-n`, `-e`, `-p`, `-s`, `-A`, `-r`, `-w` all handled
+- ✓ `/dokey <op>` — applies DoKeyOp to input editor via `ScriptAction::DoKey`
+- ✓ `/unset varname` — removes from globals HashMap
+- ✓ `isvar(name)`, `ismacro(name)` — query interpreter's live variable/macro tables
+- ✓ `textencode`/`textdecode` — TF metacharacter escaping (`%`, `\`, `;`)
+- ✓ `strchr`, `strrchr`, `regmatch`, `filename`, `dirname` — common string/path functions
+- ✓ Stubs: `moresize`, `cputime`, `kbpoint`, `kbhead`, `kbtail`, `worldname`, `nworlds`, `status_fields`, `status_width`, `status_label`
+- `worldname()`/`nworlds()` return stubs — event-loop state not accessible from interpreter builtins
 
 ### Startup
 - ✓ Bare `tf` invocation with no default world now starts idle cleanly

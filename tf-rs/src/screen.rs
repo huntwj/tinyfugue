@@ -132,6 +132,7 @@ impl Screen {
     pub fn push_line(&mut self, line: LogicalLine) -> bool {
         let char_count = line.content.char_count();
         let logical_idx = self.lines.len();
+        let phys_before = self.physlines.len();
 
         // Wrap the logical line into physical lines.
         if char_count == 0 {
@@ -163,8 +164,22 @@ impl Screen {
             }
         }
 
+        // phys lines added for this logical line (physlines were appended above)
+        let added_phys = self.physlines.len() - phys_before;
         self.lines.push_back(line);
+
+        // If the user is scrolled back, advance scrollback by the number of
+        // physical lines added so the viewport stays anchored at the same
+        // position in the output history.
+        if self.scrollback > 0 {
+            self.scrollback += added_phys;
+        }
+
+        let pre_trim = self.physlines.len();
         self.trim_to_max();
+        // If trim removed lines from the top, reduce scrollback accordingly.
+        let trimmed = pre_trim - self.physlines.len();
+        self.scrollback = self.scrollback.saturating_sub(trimmed);
 
         // Pagination check.
         if self.more_threshold > 0 && !self.paused {
@@ -380,6 +395,30 @@ mod tests {
         let moved = s.scroll_down(2);
         assert_eq!(moved, 2);
         assert_eq!(s.scrollback(), 1);
+    }
+
+    #[test]
+    fn scrollback_anchors_when_new_lines_arrive() {
+        // When the user has scrolled up, new lines should NOT move the viewport.
+        let mut s = Screen::new(80, 3);
+        for i in 0..6 {
+            s.push_line(plain_line(&format!("line {i}")));
+        }
+        // Scroll up 2 physical lines.
+        s.scroll_up(2);
+        assert_eq!(s.scrollback(), 2);
+        let visible_before: Vec<_> = s.visible_lines()
+            .map(|(ll, _)| ll.content.data.clone())
+            .collect();
+        // Add a new line.
+        s.push_line(plain_line("new line"));
+        // Scrollback should have advanced by 1 to stay anchored.
+        assert_eq!(s.scrollback(), 3);
+        // Visible content should be the same as before.
+        let visible_after: Vec<_> = s.visible_lines()
+            .map(|(ll, _)| ll.content.data.clone())
+            .collect();
+        assert_eq!(visible_before, visible_after);
     }
 
     #[test]

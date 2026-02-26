@@ -533,7 +533,7 @@ impl Interpreter {
                     } else if let Some(r) = rest.strip_prefix("-w") {
                         // -w worldname: skip the world name token
                         let r = r.trim_start();
-                        rest = r.splitn(2, char::is_whitespace).nth(1).unwrap_or("");
+                        rest = r.split_once(char::is_whitespace).map(|x| x.1).unwrap_or("");
                     } else {
                         break;
                     }
