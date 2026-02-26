@@ -79,6 +79,8 @@ pub enum ScriptAction {
     Bell,
     /// Pre-fill the input buffer with `text` (`/input text`).
     SetInput(String),
+    /// Apply a built-in key operation to the input editor (`/dokey op`).
+    DoKey(crate::keybind::DoKeyOp),
     /// Set the status bar format string (`/status [format]`).
     /// Tokens: `%world` (active world), `%T` (HH:MM), `%t` (HH:MM:SS).
     SetStatus(String),
@@ -674,6 +676,18 @@ impl Interpreter {
             "input" => {
                 let expanded = expand(args, self)?;
                 self.actions.push(ScriptAction::SetInput(expanded));
+                Ok(None)
+            }
+
+            "dokey" => {
+                // /dokey <op>  — apply a built-in key operation to the input editor.
+                let expanded = expand(args, self)?;
+                let op_name = expanded.trim();
+                if let Some(op) = crate::keybind::DoKeyOp::from_name(op_name) {
+                    self.actions.push(ScriptAction::DoKey(op));
+                } else {
+                    self.output.push(format!("% /dokey: unknown operation {:?}", op_name));
+                }
                 Ok(None)
             }
 

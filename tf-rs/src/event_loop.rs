@@ -761,6 +761,16 @@ impl EventLoop {
                 self.update_status();
                 self.need_refresh = true;
             }
+
+            ScriptAction::DoKey(op) => {
+                use crate::keybind::{EditAction, KeyBinding};
+                let action = EditAction::Bound(KeyBinding::DoKey(op));
+                // Apply the editor operation; discard any submitted line —
+                // dispatching from inside an action handler would cause async
+                // re-entrancy.  Scripts rarely (if ever) call /dokey NEWLINE.
+                let _ = self.input.apply(action);
+                self.need_refresh = true;
+            }
         }
     }
 
