@@ -690,6 +690,35 @@ impl Interpreter {
                 Ok(None)
             }
 
+            "lcd" | "cd" => {
+                let expanded = expand(args, self)?;
+                let raw = expanded.trim();
+                let dir = if raw.is_empty() {
+                    std::env::var("HOME").unwrap_or_else(|_| "/".to_owned())
+                } else if let Some(rest) = raw.strip_prefix('~') {
+                    let home = std::env::var("HOME").unwrap_or_else(|_| "/".to_owned());
+                    if rest.is_empty() {
+                        home
+                    } else {
+                        format!("{home}{rest}")
+                    }
+                } else {
+                    raw.to_owned()
+                };
+                match std::env::set_current_dir(&dir) {
+                    Ok(()) => {
+                        let cwd = std::env::current_dir()
+                            .map(|p| p.display().to_string())
+                            .unwrap_or(dir);
+                        self.output.push(format!("% {cwd}"));
+                    }
+                    Err(e) => {
+                        self.output.push(format!("% /lcd: {dir}: {e}"));
+                    }
+                }
+                Ok(None)
+            }
+
             "setenv" => {
                 // /setenv NAME=value  or  /setenv NAME value
                 let expanded = expand(args, self)?;

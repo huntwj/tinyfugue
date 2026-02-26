@@ -275,7 +275,7 @@ grouped by impact so the highest-value work is obvious at a glance.
 
 #### Commands
 - ✓ `/sh [command]` — `sh -c <cmd>` output displayed on TF screen; bare `/sh` drops to `$SHELL` (leaves raw mode, waits, repaints)
-- `/lcd [dir]` — change local working directory; used in file-path scripts
+- ✓ `/lcd [dir]` — `set_current_dir`; bare `/lcd` goes to `$HOME`; `~` prefix expanded; prints new cwd or error
 - `/recall [n]` — replay the last N input lines to screen; widely used
 - `/ps` — list running `/repeat` and `/quote` processes; essential for debugging
 - `/kill pid` — terminate a process by ID; complement to `/ps`
