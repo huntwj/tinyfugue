@@ -94,6 +94,10 @@ pub enum ScriptAction {
     /// Display the last `n` input history entries on screen (`/recall [n]`).
     /// `None` means show all.
     Recall(Option<usize>),
+    /// List all active scheduled processes (`/ps`).
+    ListProcesses,
+    /// Kill a scheduled process by ID (`/kill id`).
+    KillProcess(u32),
 
     // ── Lua scripting (requires the `lua` Cargo feature) ──────────────────
     /// Load and execute a Lua source file (`/loadlua path`).
@@ -689,6 +693,25 @@ impl Interpreter {
                     self.actions.push(ScriptAction::ShellInteractive);
                 } else {
                     self.actions.push(ScriptAction::ShellCmd(cmd.to_owned()));
+                }
+                Ok(None)
+            }
+
+            "ps" => {
+                self.actions.push(ScriptAction::ListProcesses);
+                Ok(None)
+            }
+
+            "kill" => {
+                let expanded = expand(args, self)?;
+                let s = expanded.trim();
+                match s.parse::<u32>() {
+                    Ok(id) => {
+                        self.actions.push(ScriptAction::KillProcess(id));
+                    }
+                    Err(_) => {
+                        self.output.push(format!("% /kill: invalid process id '{s}'"));
+                    }
                 }
                 Ok(None)
             }

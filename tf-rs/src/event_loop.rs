@@ -818,6 +818,47 @@ impl EventLoop {
                 }
                 self.need_refresh = true;
             }
+
+            ScriptAction::ListProcesses => {
+                let procs: Vec<_> = self.scheduler.iter().collect();
+                if procs.is_empty() {
+                    self.screen.push_line(LogicalLine::plain("% No processes running."));
+                } else {
+                    self.screen.push_line(LogicalLine::plain("% PID  TYPE     INTERVAL  RUNS  DESCRIPTION"));
+                    for p in procs {
+                        use crate::process::ProcKind;
+                        let (kind, desc) = match &p.kind {
+                            ProcKind::Repeat { body } => ("repeat", body.as_str()),
+                            ProcKind::QuoteFile { path, .. } =>
+                                ("quote", path.to_str().unwrap_or("?")),
+                            ProcKind::QuoteShell { command } => ("quote!", command.as_str()),
+                        };
+                        let runs = if p.runs_left == -1 {
+                            "∞".to_owned()
+                        } else {
+                            p.runs_left.to_string()
+                        };
+                        let interval_ms = p.interval.as_millis();
+                        let line = format!(
+                            "% {:<4} {:<8} {:>6}ms  {:>4}  {}",
+                            p.id, kind, interval_ms, runs, desc
+                        );
+                        self.screen.push_line(LogicalLine::plain(&line));
+                    }
+                }
+                self.need_refresh = true;
+            }
+
+            ScriptAction::KillProcess(id) => {
+                if self.scheduler.remove(id) {
+                    let msg = format!("% Process {id} killed.");
+                    self.screen.push_line(LogicalLine::plain(&msg));
+                } else {
+                    let msg = format!("% /kill: no process with id {id}.");
+                    self.screen.push_line(LogicalLine::plain(&msg));
+                }
+                self.need_refresh = true;
+            }
         }
     }
 

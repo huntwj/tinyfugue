@@ -277,8 +277,8 @@ grouped by impact so the highest-value work is obvious at a glance.
 - ✓ `/sh [command]` — `sh -c <cmd>` output displayed on TF screen; bare `/sh` drops to `$SHELL` (leaves raw mode, waits, repaints)
 - ✓ `/lcd [dir]` — `set_current_dir`; bare `/lcd` goes to `$HOME`; `~` prefix expanded; prints new cwd or error
 - ✓ `/recall [n]` — displays last N (or all) input history entries oldest-first with `[N] text` numbering
-- `/ps` — list running `/repeat` and `/quote` processes; essential for debugging
-- `/kill pid` — terminate a process by ID; complement to `/ps`
+- ✓ `/ps` — lists active processes with PID, type, interval, remaining runs, and description
+- ✓ `/kill pid` — removes a process by ID; prints confirmation or "no such process"
 - `/save [file]` — write current macro/trigger set to a `.tf` file; important for persistence
 - `/unworld name` — remove a world definition from `WorldStore`
 - `/listvar [pattern]` — list interpreter globals; debugging staple
