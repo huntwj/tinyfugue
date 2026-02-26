@@ -251,12 +251,12 @@ These features are recognized as missing but not yet scheduled:
 - `/beep` — ✓ writes `\x07` to stdout via `ScriptAction::Bell`
 - `/visual`, `/mode`, `/redraw` — ✓ explicit no-op stubs; binary always runs in visual mode
 - `/input` — ✓ `ScriptAction::SetInput` calls `LineEditor::set_text()`; buffer ready for next Enter
-- `/status` — configure status line field format
+- `/status` — ✓ `/status <format>` sets `status_format`; `update_status()` evaluates `%world`, `%T` (HH:MM), `%t` (HH:MM:SS); flag-form (`-a/-r/-i`) silently accepted
 - `/setenv name=value` — ✓ calls `std::env::set_var`
 
 ### Display
 - `@{...}` TF attribute sequences — ✓ `TfStr::from_tf_markup()` parses all spec codes (bold, underline, italic, reverse, named colors, `rgbXYZ` mapped to nearest 16-color) and strips them from visible text; script/macro output now renders colors correctly
-- Status line supports only `(world) time`; custom field format strings are parsed but not evaluated
+- ✓ Status line format is user-settable via `/status <format>`; `%world`/`%T`/`%t` tokens evaluated; full `tfstatus.tf` field system (named fields, widths, `@clock`) not implemented
 
 ### Networking
 - ✓ ATCP / GMCP telnet payloads now routed to `Hook::Atcp` / `Hook::Gmcp`; `Hook` enum extended to 34 variants

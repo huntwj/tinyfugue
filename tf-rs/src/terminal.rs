@@ -158,14 +158,53 @@ impl Terminal {
         self.height = height;
     }
 
-    /// The row index (0-based) of the first status-bar row.
+    /// The row index (0-based) of the input line (last row).
+    pub fn input_row(&self) -> u16 {
+        self.height.saturating_sub(1)
+    }
+
+    /// The row index (0-based) of the first status-bar row (above input).
     pub fn status_top(&self) -> u16 {
-        self.height.saturating_sub(self.status_height)
+        self.height.saturating_sub(1 + self.status_height)
     }
 
     /// The row index (0-based) of the output area bottom (exclusive).
     pub fn output_bottom(&self) -> u16 {
         self.status_top()
+    }
+
+    /// Render the input line at the bottom row.
+    ///
+    /// Draws `text` truncated to the terminal width, then positions the cursor
+    /// at `cursor_col` within the input row.
+    pub fn render_input(&mut self, text: &str, cursor_col: usize) -> io::Result<()> {
+        let row = self.input_row();
+        let width = self.width as usize;
+        // Collect chars for width-safe slicing.
+        let chars: Vec<char> = text.chars().collect();
+        // If the text is wider than the terminal, show the window ending at
+        // cursor position so the cursor stays visible.
+        let (display_start, cursor_x) = if cursor_col < width {
+            (0, cursor_col as u16)
+        } else {
+            let start = cursor_col + 1 - width;
+            (start, (width - 1) as u16)
+        };
+        let display: String = chars
+            .get(display_start..)
+            .unwrap_or(&[])
+            .iter()
+            .take(width)
+            .collect();
+        queue!(
+            self.out,
+            cursor::Hide,
+            cursor::MoveTo(0, row),
+            terminal::Clear(ClearType::UntilNewLine),
+            Print(&display),
+            cursor::MoveTo(cursor_x, row),
+            cursor::Show
+        )
     }
 
     // ── Low-level rendering ───────────────────────────────────────────────────
@@ -377,6 +416,12 @@ pub struct RawModeGuard(());
 
 impl Drop for RawModeGuard {
     fn drop(&mut self) {
+        // Move cursor to a known position and show it before leaving raw mode.
+        let _ = crossterm::execute!(
+            std::io::stdout(),
+            cursor::Show,
+            cursor::MoveTo(0, 0)
+        );
         let _ = terminal::disable_raw_mode();
     }
 }

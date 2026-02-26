@@ -366,6 +366,12 @@ impl EventLoop {
         let mut sigint   = signal(SignalKind::interrupt())?;
         let mut sighup   = signal(SignalKind::hangup())?;
 
+        // Enable raw mode for the duration of the session.
+        let _raw = Terminal::enter_raw_mode()?;
+
+        // Initial full-screen paint.
+        self.refresh_display();
+
         let mut stdin = tokio::io::stdin();
         let mut stdin_buf = [0u8; 256];
 
@@ -414,6 +420,12 @@ impl EventLoop {
                                     }
                                 }
                             }
+                            // Render the updated input line after every keystroke
+                            // batch so the user sees their typing immediately.
+                            let text = self.input.editor.text();
+                            let pos  = self.input.editor.pos;
+                            let _ = self.terminal.render_input(&text, pos);
+                            let _ = self.terminal.flush();
                         }
                     }
                 }
@@ -1029,7 +1041,7 @@ impl EventLoop {
         self.status = StatusLine::new(text);
     }
 
-    /// Render the screen and status bar, then flush.
+    /// Render the screen, status bar, and input line, then flush.
     fn refresh_display(&mut self) {
         self.update_status();
         let status = self.status.clone();
@@ -1038,6 +1050,9 @@ impl EventLoop {
         if self.screen.paused {
             let _ = self.terminal.show_more_prompt();
         }
+        let text = self.input.editor.text();
+        let pos  = self.input.editor.pos;
+        let _ = self.terminal.render_input(&text, pos);
         let _ = self.terminal.flush();
     }
 
