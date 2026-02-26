@@ -620,6 +620,23 @@ impl Interpreter {
                 Ok(None)
             }
 
+            "listvar" => {
+                let expanded = expand(args, self)?;
+                let pat = expanded.trim().to_owned();
+                let mut vars: Vec<(&String, &Value)> = self.globals.iter()
+                    .filter(|(k, _)| pat.is_empty() || k.contains(pat.as_str()))
+                    .collect();
+                vars.sort_by_key(|(k, _)| k.as_str());
+                if vars.is_empty() {
+                    self.output.push("% No variables defined.".to_owned());
+                } else {
+                    for (k, v) in vars {
+                        self.output.push(format!("% {k}={v}"));
+                    }
+                }
+                Ok(None)
+            }
+
             "list" | "listdefs" => {
                 let filter = {
                     let expanded = expand(args, self)?;

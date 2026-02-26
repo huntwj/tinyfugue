@@ -281,7 +281,7 @@ grouped by impact so the highest-value work is obvious at a glance.
 - ✓ `/kill pid` — removes a process by ID; prints confirmation or "no such process"
 - ✓ `/save [file]` — serializes all non-invisible macros as `/def` commands via `Macro::to_def_command()`; writes to file or prints to screen
 - `/unworld name` — remove a world definition from `WorldStore`
-- `/listvar [pattern]` — list interpreter globals; debugging staple
+- ✓ `/listvar [pattern]` — lists globals sorted alphabetically; optional substring filter; no event-loop round-trip needed
 - `/histsize n` — set scrollback buffer depth at runtime
 - `/version` — print binary version string; scripts check `%version`
 
