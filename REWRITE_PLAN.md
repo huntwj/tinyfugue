@@ -241,42 +241,110 @@ Issues found during daily use and fixed after the Phase 15 cutover:
 
 ## Known Gaps
 
-These features are recognized as missing but not yet scheduled:
+These features are recognized as missing but not yet scheduled.  Items are
+grouped by impact so the highest-value work is obvious at a glance.
 
-### Commands silently ignored
-- `/gag` — already works via `/def -ag`; no standalone command needed
-- `/hilite` / `/attr` — ✓ trigger `attr` field now applied to `LogicalLine` on match
+### Already resolved (archive)
+- `/gag` — works via `/def -ag`; no standalone command needed
+- `/hilite` / `/attr` — ✓ trigger `attr` field applied to `LogicalLine` on match
 - `/purge [pattern]` — ✓ `MacroStore::purge()` removes anonymous or prefix-matched macros
-- `/saveworld [-w world] [file]` — ✓ `World::to_addworld()` serializes to `/addworld` command syntax; writes to file or prints to screen
-- `/beep` — ✓ writes `\x07` to stdout via `ScriptAction::Bell`
-- `/visual`, `/mode`, `/redraw` — ✓ explicit no-op stubs; binary always runs in visual mode
-- `/input` — ✓ `ScriptAction::SetInput` calls `LineEditor::set_text()`; buffer ready for next Enter
-- `/status` — ✓ `/status <format>` sets `status_format`; `update_status()` evaluates `%world`, `%T` (HH:MM), `%t` (HH:MM:SS); flag-form (`-a/-r/-i`) silently accepted
-- `/setenv name=value` — ✓ calls `std::env::set_var`
+- `/saveworld` — ✓ `World::to_addworld()` serializes to `/addworld` syntax
+- `/beep` — ✓ writes `\x07` via `ScriptAction::Bell`
+- `/visual`, `/mode`, `/redraw`, `/localecho` — ✓ explicit no-ops
+- `/input` — ✓ `ScriptAction::SetInput` → `LineEditor::set_text()`
+- `/status <format>` — ✓ `%world`/`%T`/`%t` tokens; flag-form silently accepted
+- `/setenv` — ✓ `std::env::set_var`
+- `/dokey` — ✓ `ScriptAction::DoKey`
+- `/unset` — ✓ removes from globals
+- `@{...}` TF attribute sequences — ✓ `TfStr::from_tf_markup()` parses all codes
+- Raw mode + input line rendering — ✓ enabled at `EventLoop::run()` start
+- Scrollback viewport anchor — ✓ `push_line()` keeps view pinned when scrolled back
+- ATCP / GMCP — ✓ `Hook::Atcp` / `Hook::Gmcp`; 34 hook variants
+- `mktime`, `ftime`, `textencode`, `textdecode`, `strchr`, `strrchr`, `regmatch`,
+  `filename`, `dirname`, `isvar`, `ismacro` — ✓ implemented
+- `kbpoint()` / `kbhead()` / `kbtail()` — ✓ live editor state via globals
+- `moresize()` — ✓ `Screen::scrollback()` via globals
+- `cputime()` — ✓ `getrusage(RUSAGE_SELF)`
+- `status_fields()` / `status_width()` / `status_label()` — ✓ parse `%status_fields`
+- `worldname()` / `nworlds()` — ✓ live event-loop state via globals
+- Bare `tf` invocation with no world — ✓ starts idle cleanly
 
-### Display
-- `@{...}` TF attribute sequences — ✓ `TfStr::from_tf_markup()` parses all spec codes (bold, underline, italic, reverse, named colors, `rgbXYZ` mapped to nearest 16-color) and strips them from visible text; script/macro output now renders colors correctly
-- ✓ Status line format is user-settable via `/status <format>`; `%world`/`%T`/`%t` tokens evaluated; full `tfstatus.tf` field system (named fields, widths, `@clock`) not implemented
-- ✓ Raw mode enabled at `EventLoop::run()` start; `Terminal::render_input()` draws the input buffer at the bottom row with correct cursor placement; input re-rendered after every keystroke batch and on every screen refresh
-- ✓ Scrollback viewport anchored: when user is scrolled back, `push_line()` increments `scrollback` by the number of new physical lines so the view stays pinned rather than drifting toward the bottom
+---
 
-### Networking
-- ✓ ATCP / GMCP telnet payloads now routed to `Hook::Atcp` / `Hook::Gmcp`; `Hook` enum extended to 34 variants
-- MCP (MUD Client Protocol) not implemented
+### High impact — missing, commonly needed in daily use
 
-### Scripting
-- ✓ `mktime(str)` — parses `YYYY-MM-DD HH:MM:SS`, `YYYY/MM/DD HH:MM:SS`, `HH:MM:SS`, and bare integers; roundtrips with `ftime`
-- ✓ `/echo` flag stripping — `-n`, `-e`, `-p`, `-s`, `-A`, `-r`, `-w` all handled
-- ✓ `/dokey <op>` — applies DoKeyOp to input editor via `ScriptAction::DoKey`
-- ✓ `/unset varname` — removes from globals HashMap
-- ✓ `isvar(name)`, `ismacro(name)` — query interpreter's live variable/macro tables
-- ✓ `textencode`/`textdecode` — TF metacharacter escaping (`%`, `\`, `;`)
-- ✓ `strchr`, `strrchr`, `regmatch`, `filename`, `dirname` — common string/path functions
-- ✓ `kbpoint()` / `kbhead()` / `kbtail()` — synced from `LineEditor` into interpreter globals after every keystroke; returns cursor char-offset, text before cursor, text after cursor
-- ✓ `moresize()` — synced from `Screen::scrollback()` in `refresh_display()`; returns lines above current view
-- ✓ `cputime()` — real process CPU time (user + system) via `libc::getrusage(RUSAGE_SELF)`
-- ✓ `status_fields()` — returns `%status_fields` interpreter global; `status_width(name)` / `status_label(name)` parse the field spec string (`name:width:label` tokens) to extract per-field attributes
-- ✓ `worldname()` / `nworlds()` — `update_status()` syncs `active_world` name and `handles.len()` into interpreter globals `worldname`/`nworlds` on every world-state change; `call_fn` reads them back so scripts always see live values
+#### Commands
+- `/sh [command]` — run a shell command; `^[!` binding in `stdlib.tf` is dead without it
+- `/lcd [dir]` — change local working directory; used in file-path scripts
+- `/recall [n]` — replay the last N input lines to screen; widely used
+- `/ps` — list running `/repeat` and `/quote` processes; essential for debugging
+- `/kill pid` — terminate a process by ID; complement to `/ps`
+- `/save [file]` — write current macro/trigger set to a `.tf` file; important for persistence
+- `/unworld name` — remove a world definition from `WorldStore`
+- `/listvar [pattern]` — list interpreter globals; debugging staple
+- `/histsize n` — set scrollback buffer depth at runtime
+- `/version` — print binary version string; scripts check `%version`
 
-### Startup
-- ✓ Bare `tf` invocation with no default world now starts idle cleanly
+#### Functions
+- `fg_world()` — `tfstatus.tf` uses `fg_world() =~ ""` to detect no active world;
+  currently `worldname()` exists but `fg_world()` is a separate entry in `funclist.h`
+  (they should return the same value)
+- `is_open(world)` / `is_connected(world)` — check whether a named world has an
+  open/established connection; used extensively in multi-world scripts
+- `nactive()` — count of worlds with active (established) connections; used in status bars
+- `columns()` / `winlines()` — terminal width and height; needed for layout calculations
+  in `tfstatus.tf`, `activity_status.tf`, and user scripts
+- `idle([world])` / `sidle([world])` — seconds since last keyboard input / server data;
+  used in auto-away and watchdog scripts
+- `tfopen(file, mode)` / `tfread(fd)` / `tfwrite(fd, str)` / `tfclose(fd)` /
+  `tfflush(fd)` / `tfreadable(fd)` — file I/O API; used in logging, history-save,
+  and data-export scripts
+
+---
+
+### Medium impact — useful but not daily blockers
+
+#### Commands
+- `/listsockets` — alias for `/listworlds`; some scripts use this name
+- `/shift [n]` — drop first N positional params; used in argument-parsing macros
+- `/undefn pattern` — bulk-remove macros matching a pattern (distinct from `/undef name`)
+- `/histsize n` — already listed above (high)
+- `/trigpc chance body` — fire body with given percent probability; used in some MUD scripts
+
+#### Functions
+- `fake_recv([world,] line)` — inject a line as if received from the server; invaluable
+  for testing triggers and hooks without a live connection
+- `nlog()` / `nmail()` / `nread()` — count of active log files / unread mail / unread
+  lines; used in status bars from `tfstatus.tf`
+- `world_info(world, field)` — query host/port/type/char for a named world
+- `strip_attr(str)` — remove TF `@{...}` markup from a string, returning plain text
+- `encode_ansi(str)` / `decode_ansi(str)` — convert between TF attr markup and raw ANSI
+  escape sequences; used when passing strings between TF and shell commands
+- `morepaused()` / `morescroll(n)` — query/control the pager; needed for `status_int_more`
+  in `tfstatus.tf`
+- `kblen()` / `kbdel(n)` / `kbgoto(n)` / `kbmatch([pat])` — remaining keyboard
+  introspection and manipulation functions (complement to `kbpoint`/`kbhead`/`kbtail`)
+- `gethostname()` — return the local hostname; used in scripts that tag log files
+
+#### Display
+- Full `tfstatus.tf` named-field system — `/status_add`, `/status_rm`, `/status_edit`,
+  `/status_clear`; field-by-field evaluation of `status_int_*` / `status_var_*` exprs;
+  dynamic (`@`) field refresh on a timer tick.  High effort; replaces the current
+  `%world`/`%T`/`%t` token system entirely.
+
+---
+
+### Low impact — niche or rarely needed
+
+- MCP (MUD Client Protocol) — complex, only a handful of servers use it
+- `/features` — print compiled-in feature flags; trivial to add but rarely queried
+- `/export name` — copy interpreter variable to `std::env`; `/setenv` covers most uses
+- `/restrict level` — lock down dangerous commands; not needed for personal use
+- `/suspend` — send `SIGSTOP` to self; job-control relic
+- `/recordline str` — manually append a line to input history
+- `/listsockets` — duplicate of `/listworlds`
+- `/watchdog interval` / `/watchname name` — reconnect-on-silence; useful but
+  implementable as a `/repeat` script
+- `option102([world,] on/off)` — niche telnet option; only relevant to specific servers
+- `isatty()` — check if stdin is a tty; rarely needed
+- `keycode(key)` — look up raw escape sequence for a key name
