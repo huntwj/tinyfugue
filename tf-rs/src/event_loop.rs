@@ -320,6 +320,13 @@ pub struct EventLoop {
     /// Named status-bar fields populated by `/status_add`.
     /// When non-empty, these replace the simple `%world`/`%T` token format.
     status_fields: Vec<StatusField>,
+
+    /// Watchdog: reconnect if this world goes silent for `watchdog_interval`.
+    watchdog_interval: Option<Duration>,
+    /// Which world the watchdog monitors (`None` = active world).
+    watchdog_world: Option<String>,
+    /// Per-world timestamp of the last received line (used by watchdog check).
+    last_data_per_world: HashMap<String, Instant>,
 }
 
 impl EventLoop {
@@ -355,6 +362,9 @@ impl EventLoop {
             last_keystroke: Instant::now(),
             last_server_data: Instant::now(),
             status_fields: Vec::new(),
+            watchdog_interval: None,
+            watchdog_world: None,
+            last_data_per_world: HashMap::new(),
         }
     }
 
@@ -458,6 +468,7 @@ impl EventLoop {
                 self.scheduler.next_wakeup(),
                 Some(self.mail_next),
                 Some(now + REFRESH_INTERVAL),
+                self.watchdog_deadline(),
             ]
             .into_iter()
             .flatten()
@@ -545,6 +556,7 @@ impl EventLoop {
                     let now = Instant::now();
                     self.run_due_processes(now).await;
                     self.check_mail(now).await;
+                    self.check_watchdog(now).await;
                     if self.need_refresh {
                         self.refresh_display();
                         self.need_refresh = false;
@@ -658,6 +670,43 @@ impl EventLoop {
             ScriptAction::AddQuoteShell { interval_ms, command, world } => {
                 let interval = Duration::from_millis(interval_ms);
                 self.scheduler.add_quote_shell(command, interval, -1, world);
+            }
+
+            ScriptAction::QuoteFileSync { path, world } => {
+                // Send all lines from the file immediately, no scheduling delay.
+                use std::io::BufRead;
+                let target = world.or_else(|| self.active_world.clone());
+                if let Some(ref w) = target {
+                    if let Ok(file) = std::fs::File::open(&path) {
+                        let reader = std::io::BufReader::new(file);
+                        let world_name = w.clone();
+                        for line in reader.lines().map_while(Result::ok) {
+                            if let Some(handle) = self.handles.get(&world_name) {
+                                handle.send_line(&line).await;
+                            }
+                        }
+                    }
+                }
+            }
+
+            ScriptAction::QuoteShellSync { command, world } => {
+                // Run shell command and send all output lines immediately.
+                let target = world.or_else(|| self.active_world.clone());
+                let output = tokio::process::Command::new("sh")
+                    .arg("-c")
+                    .arg(&command)
+                    .output()
+                    .await;
+                if let Ok(out) = output {
+                    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+                    if let Some(ref w) = target {
+                        for line in text.lines() {
+                            if let Some(handle) = self.handles.get(w) {
+                                handle.send_line(line).await;
+                            }
+                        }
+                    }
+                }
             }
 
             // ── Macro / binding management ────────────────────────────────
@@ -837,6 +886,18 @@ impl EventLoop {
 
             ScriptAction::RecordLine(line) => {
                 self.input.history.record(&line);
+            }
+
+            ScriptAction::SetWatchdog(secs) => {
+                self.watchdog_interval = if secs == 0 {
+                    None
+                } else {
+                    Some(Duration::from_secs(secs))
+                };
+            }
+
+            ScriptAction::SetWatchName(name) => {
+                self.watchdog_world = if name.is_empty() { None } else { Some(name) };
             }
 
             ScriptAction::SetStatus(fmt) => {
@@ -1160,7 +1221,9 @@ impl EventLoop {
 
         match msg.event {
             NetEvent::Line(bytes) => {
-                self.last_server_data = Instant::now();
+                let now = Instant::now();
+                self.last_server_data = now;
+                self.last_data_per_world.insert(msg.world.clone(), now);
                 let text = String::from_utf8_lossy(&bytes).into_owned();
 
                 // Trigger matching.
@@ -1361,6 +1424,50 @@ impl EventLoop {
                 false
             }
         }
+    }
+
+    // ── Watchdog ──────────────────────────────────────────────────────────
+
+    /// If watchdog is configured and the monitored world has been silent for
+    /// longer than the watchdog interval, drop and reconnect it.
+    async fn check_watchdog(&mut self, now: Instant) {
+        let Some(interval) = self.watchdog_interval else { return };
+        let world_name = self.watchdog_world.clone()
+            .or_else(|| self.active_world.clone());
+        let Some(world_name) = world_name else { return };
+
+        // Only trigger for worlds that are currently connected.
+        if !self.handles.contains_key(&world_name) {
+            return;
+        }
+
+        let elapsed = self.last_data_per_world
+            .get(&world_name)
+            .map(|t| now.duration_since(*t))
+            .unwrap_or(Duration::MAX);
+
+        if elapsed >= interval {
+            let msg = format!("** Watchdog: reconnecting to {world_name} **");
+            self.screen.push_line(LogicalLine::plain(&msg));
+            // Drop the stale handle; connection_task will notice its receiver closed.
+            self.handles.remove(&world_name);
+            // Reset the timer so we don't trigger again immediately.
+            self.last_data_per_world.insert(world_name.clone(), now);
+            self.connect_world_by_name(&world_name).await;
+            self.need_refresh = true;
+        }
+    }
+
+    /// Earliest time the watchdog needs to fire, for the select! deadline.
+    fn watchdog_deadline(&self) -> Option<Instant> {
+        let interval = self.watchdog_interval?;
+        let world = self.watchdog_world.as_deref()
+            .or(self.active_world.as_deref())?;
+        if !self.handles.contains_key(world) {
+            return None;
+        }
+        let last = self.last_data_per_world.get(world)?;
+        Some(*last + interval)
     }
 
     // ── Mail check ────────────────────────────────────────────────────────

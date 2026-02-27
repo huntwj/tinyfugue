@@ -50,6 +50,10 @@ pub enum ScriptAction {
     AddQuoteFile { interval_ms: u64, path: String, world: Option<String> },
     /// Schedule a `/quote !cmd` process.
     AddQuoteShell { interval_ms: u64, command: String, world: Option<String> },
+    /// Send all lines of a file immediately (`/quote -S 'file`).
+    QuoteFileSync { path: String, world: Option<String> },
+    /// Run a shell command and send all output lines immediately (`/quote -S !cmd`).
+    QuoteShellSync { command: String, world: Option<String> },
 
     // ── Macro / binding management ─────────────────────────────────────────
     /// Remove a named macro (mirrors `/undef`).
@@ -127,6 +131,10 @@ pub enum ScriptAction {
     StatusClear,
     /// Add a line to the input history (`/recordline line`).
     RecordLine(String),
+    /// Set the watchdog interval in seconds (0 = disable) (`/watchdog [n]`).
+    SetWatchdog(u64),
+    /// Set which world the watchdog monitors (`/watchname [name]`; empty = active world).
+    SetWatchName(String),
 
     // ── Lua scripting (requires the `lua` Cargo feature) ──────────────────
     /// Load and execute a Lua source file (`/loadlua path`).
@@ -656,21 +664,41 @@ impl Interpreter {
 
             "quote" => {
                 let expanded = expand(args, self)?;
-                let trimmed: &str = expanded.trim();
-                // Format: /quote [/interval] 'file   or   /quote [/interval] !cmd
-                let (interval_ms, rest) = parse_quote_interval(trimmed);
+                let trimmed = expanded.trim();
+                // Format: /quote [-S] [/interval] 'file   or   /quote [-S] [/interval] !cmd
+                // -S means synchronous: send all lines immediately without scheduling.
+                let (sync, after_flag) = if let Some(r) = trimmed.strip_prefix("-S") {
+                    (true, r.trim_start())
+                } else {
+                    (false, trimmed)
+                };
+                let (interval_ms, rest) = parse_quote_interval(after_flag);
                 if let Some(path) = rest.strip_prefix('\'') {
-                    self.actions.push(ScriptAction::AddQuoteFile {
-                        interval_ms,
-                        path: path.to_owned(),
-                        world: None,
-                    });
+                    if sync {
+                        self.actions.push(ScriptAction::QuoteFileSync {
+                            path: path.to_owned(),
+                            world: None,
+                        });
+                    } else {
+                        self.actions.push(ScriptAction::AddQuoteFile {
+                            interval_ms,
+                            path: path.to_owned(),
+                            world: None,
+                        });
+                    }
                 } else if let Some(cmd) = rest.strip_prefix('!') {
-                    self.actions.push(ScriptAction::AddQuoteShell {
-                        interval_ms,
-                        command: cmd.to_owned(),
-                        world: None,
-                    });
+                    if sync {
+                        self.actions.push(ScriptAction::QuoteShellSync {
+                            command: cmd.to_owned(),
+                            world: None,
+                        });
+                    } else {
+                        self.actions.push(ScriptAction::AddQuoteShell {
+                            interval_ms,
+                            command: cmd.to_owned(),
+                            world: None,
+                        });
+                    }
                 } else {
                     self.output.push("% /quote: expected 'file or !command".to_owned());
                 }
@@ -992,6 +1020,19 @@ impl Interpreter {
             "recordline" => {
                 let expanded = expand(args, self)?;
                 self.actions.push(ScriptAction::RecordLine(expanded));
+                Ok(None)
+            }
+
+            "watchdog" => {
+                let expanded = expand(args, self)?;
+                let secs: u64 = expanded.trim().parse().unwrap_or(0);
+                self.actions.push(ScriptAction::SetWatchdog(secs));
+                Ok(None)
+            }
+
+            "watchname" => {
+                let expanded = expand(args, self)?;
+                self.actions.push(ScriptAction::SetWatchName(expanded.trim().to_owned()));
                 Ok(None)
             }
 
