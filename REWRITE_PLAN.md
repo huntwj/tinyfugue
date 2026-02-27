@@ -291,9 +291,7 @@ grouped by impact so the highest-value work is obvious at a glance.
 - ✓ `nactive()` — count of open connections (= `nworlds`); synced in `update_status()`
 - ✓ `columns()` / `winlines()` / `lines()` — terminal width/height synced from `Terminal` in `refresh_display()`
 - ✓ `idle()` / `sidle()` — `last_keystroke` / `last_server_data` `Instant` fields on `EventLoop`, updated on each keystroke / incoming line; elapsed seconds synced to `_idle` / `_sidle` globals in `refresh_display()`
-- `tfopen(file, mode)` / `tfread(fd)` / `tfwrite(fd, str)` / `tfclose(fd)` /
-  `tfflush(fd)` / `tfreadable(fd)` — file I/O API; used in logging, history-save,
-  and data-export scripts
+- ✓ `tfopen(file, mode)` / `tfread(fd)` / `tfwrite(fd, str)` / `tfclose(fd)` / `tfflush(fd)` / `tfreadable(fd)` — file I/O API backed by `HashMap<i64, TfFile>` on the interpreter; modes `r`/`w`/`a`; `tfread` returns `-1` on EOF; `fwrite` aliased to `tfwrite`
 
 ---
 

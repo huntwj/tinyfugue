@@ -138,6 +138,15 @@ pub enum ScriptAction {
 /// system access.
 pub type FileLoader = Arc<dyn Fn(&str) -> Result<String, String> + Send + Sync>;
 
+// ── TF file descriptors ───────────────────────────────────────────────────────
+
+/// An open file managed by `tfopen` / `tfread` / `tfwrite` / `tfclose`.
+enum TfFile {
+    Reader(std::io::BufReader<std::fs::File>),
+    Writer(std::fs::File),
+    Appender(std::fs::File),
+}
+
 // ── ControlFlow ───────────────────────────────────────────────────────────────
 
 /// Non-error control-flow signals that can unwind the call stack.
@@ -172,6 +181,10 @@ pub struct Interpreter {
     pub actions: Vec<ScriptAction>,
     /// Optional callback for `/load` and `/eval /load …`.
     pub file_loader: Option<FileLoader>,
+    /// Open file descriptors for `tfopen`/`tfread`/`tfwrite`/`tfclose`.
+    tf_files: HashMap<i64, TfFile>,
+    /// Counter for the next fd to allocate (TF uses 1-based fds).
+    next_tf_fd: i64,
 }
 
 impl Default for Interpreter {
@@ -189,6 +202,8 @@ impl Interpreter {
             output: Vec::new(),
             actions: Vec::new(),
             file_loader: None,
+            tf_files: HashMap::new(),
+            next_tf_fd: 1,
         }
     }
 
@@ -1124,6 +1139,92 @@ impl EvalContext for Interpreter {
                 let label = status_field_attr(&spec, &name, 2).unwrap_or_default();
                 return Ok(Value::Str(label));
             }
+            // ── File I/O ──────────────────────────────────────────────────────
+            "tfopen" => {
+                use std::fs::OpenOptions;
+                let path = args.first().map(|v| v.to_string()).unwrap_or_default();
+                let mode = args.get(1).map(|v| v.to_string()).unwrap_or_else(|| "r".to_owned());
+                let result = match mode.as_str() {
+                    "r" => std::fs::File::open(&path).map(|f| TfFile::Reader(std::io::BufReader::new(f))),
+                    "w" => OpenOptions::new().write(true).create(true).truncate(true).open(&path).map(TfFile::Writer),
+                    "a" => OpenOptions::new().create(true).append(true).open(&path).map(TfFile::Appender),
+                    _ => {
+                        return Ok(Value::Int(-1));
+                    }
+                };
+                match result {
+                    Ok(tf_file) => {
+                        let fd = self.next_tf_fd;
+                        self.next_tf_fd += 1;
+                        self.tf_files.insert(fd, tf_file);
+                        return Ok(Value::Int(fd));
+                    }
+                    Err(_) => return Ok(Value::Int(-1)),
+                }
+            }
+            "tfclose" => {
+                let fd = args.first().map(|v| v.to_string()).unwrap_or_default()
+                    .parse::<i64>().unwrap_or(-1);
+                let removed = self.tf_files.remove(&fd).is_some();
+                return Ok(Value::Int(if removed { 1 } else { 0 }));
+            }
+            "tfread" => {
+                use std::io::BufRead;
+                let fd = args.first().map(|v| v.to_string()).unwrap_or_default()
+                    .parse::<i64>().unwrap_or(-1);
+                match self.tf_files.get_mut(&fd) {
+                    Some(TfFile::Reader(r)) => {
+                        let mut line = String::new();
+                        match r.read_line(&mut line) {
+                            Ok(0) => return Ok(Value::Int(-1)), // EOF
+                            Ok(_) => {
+                                if line.ends_with('\n') { line.pop(); }
+                                if line.ends_with('\r') { line.pop(); }
+                                return Ok(Value::Str(line));
+                            }
+                            Err(_) => return Ok(Value::Int(-1)),
+                        }
+                    }
+                    _ => return Ok(Value::Int(-1)),
+                }
+            }
+            "tfwrite" | "fwrite" => {
+                use std::io::Write;
+                let fd = args.first().map(|v| v.to_string()).unwrap_or_default()
+                    .parse::<i64>().unwrap_or(-1);
+                let text = args.get(1).map(|v| v.to_string()).unwrap_or_default();
+                let ok = match self.tf_files.get_mut(&fd) {
+                    Some(TfFile::Writer(f) | TfFile::Appender(f)) => {
+                        writeln!(f, "{text}").is_ok()
+                    }
+                    _ => false,
+                };
+                return Ok(Value::Int(if ok { 1 } else { 0 }));
+            }
+            "tfflush" => {
+                use std::io::Write;
+                let fd = args.first().map(|v| v.to_string()).unwrap_or_default()
+                    .parse::<i64>().unwrap_or(-1);
+                let ok = match self.tf_files.get_mut(&fd) {
+                    Some(TfFile::Writer(f) | TfFile::Appender(f)) => f.flush().is_ok(),
+                    _ => false,
+                };
+                return Ok(Value::Int(if ok { 1 } else { 0 }));
+            }
+            "tfreadable" => {
+                let fd = args.first().map(|v| v.to_string()).unwrap_or_default()
+                    .parse::<i64>().unwrap_or(-1);
+                // A reader is "readable" if it still has data (buffer non-empty or file not at EOF).
+                let readable = match self.tf_files.get_mut(&fd) {
+                    Some(TfFile::Reader(r)) => {
+                        use std::io::BufRead;
+                        r.fill_buf().map(|b| !b.is_empty()).unwrap_or(false)
+                    }
+                    _ => false,
+                };
+                return Ok(Value::Int(if readable { 1 } else { 0 }));
+            }
+
             _ => {}
         }
 
