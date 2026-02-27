@@ -617,6 +617,20 @@ impl Interpreter {
             }
 
             // ── Process scheduling ─────────────────────────────────────────────
+            "trigpc" => {
+                // /trigpc chance body — execute body with `chance` percent probability.
+                let expanded = expand(args, self)?;
+                let (chance_str, body) = expanded.trim()
+                    .split_once(char::is_whitespace)
+                    .map(|(a, b)| (a, b.trim_start()))
+                    .unwrap_or((expanded.trim(), ""));
+                let chance: u64 = chance_str.parse().unwrap_or(0).clamp(0, 100);
+                if chance > 0 && trigpc_roll() < chance {
+                    self.exec_script(body)?;
+                }
+                Ok(None)
+            }
+
             "repeat" => {
                 let expanded = expand(args, self)?;
                 let (interval_ms, count, body, world) = parse_repeat_args(expanded.trim());
@@ -1298,6 +1312,31 @@ impl EvalContext for Interpreter {
                 self.actions.push(ScriptAction::KbGoto(pos));
                 return Ok(Value::Int(1));
             }
+            "kbmatch" => {
+                // kbmatch([pat]) — find first occurrence of pattern in input buffer.
+                // Returns the 0-based char position, or -1 if not found.
+                // Without an argument, returns the start of the current word.
+                let head = self.globals.get("kbhead").map(|v| v.to_string()).unwrap_or_default();
+                let tail = self.globals.get("kbtail").map(|v| v.to_string()).unwrap_or_default();
+                let buf = format!("{head}{tail}");
+                let pos = if args.is_empty() {
+                    // No pattern: find start of current word (last whitespace before cursor).
+                    let cursor = head.chars().count();
+                    let head_chars: Vec<char> = head.chars().collect();
+                    let word_start = head_chars.iter().rposition(|c| c.is_whitespace())
+                        .map(|i| i + 1)
+                        .unwrap_or(0);
+                    if word_start < cursor { word_start as i64 } else { -1 }
+                } else {
+                    let pat = args[0].to_string();
+                    buf.char_indices()
+                        .enumerate()
+                        .find(|(_, (byte_pos, _))| buf[*byte_pos..].starts_with(&pat))
+                        .map(|(char_pos, _)| char_pos as i64)
+                        .unwrap_or(-1)
+                };
+                return Ok(Value::Int(pos));
+            }
 
             // ── Pager control ─────────────────────────────────────────────────
             "morepaused" => {
@@ -1745,6 +1784,30 @@ fn tokenise_addworld(s: &str) -> Vec<String> {
         tokens.push(cur);
     }
     tokens
+}
+
+// ── trigpc PRNG ───────────────────────────────────────────────────────────────
+
+/// Return a pseudo-random number in `0..100` for `/trigpc` probability checks.
+///
+/// Uses a xorshift64 PRNG seeded from system time on first call.  Not
+/// cryptographically secure, but suitable for MUD trigger probability.
+fn trigpc_roll() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static STATE: AtomicU64 = AtomicU64::new(0);
+    let mut s = STATE.load(Ordering::Relaxed);
+    if s == 0 {
+        s = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0xdeadbeef);
+        if s == 0 { s = 0xdeadbeef; }
+    }
+    s ^= s << 13;
+    s ^= s >> 7;
+    s ^= s << 17;
+    STATE.store(s, Ordering::Relaxed);
+    s % 100
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

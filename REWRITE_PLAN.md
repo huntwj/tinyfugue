@@ -301,21 +301,20 @@ grouped by impact so the highest-value work is obvious at a glance.
 - ✓ `/listsockets` — alias for `/listworlds`
 - ✓ `/shift [n]` — drop first N positional params from current frame (`frame.params.drain(..n)`)
 - ✓ `/undefn pattern` — `ScriptAction::UndefMacrosMatching`; event loop removes all macros whose name contains the pattern
-- `/trigpc chance body` — fire body with given percent probability; used in some MUD scripts
+- ✓ `/trigpc chance body` — xorshift64 PRNG seeded from system time; fires body when `roll < chance`
 
 #### Functions
 - ✓ `fake_recv([world,] line)` — `ScriptAction::FakeRecv`; processed inline in event loop via `fire_hook_sync` to avoid async recursion
 - ✓ `nlog()` / `nmail()` / `nread()` — `nlog` synced from `log_file.is_some()`; mail counts return 0
 - ✓ `world_info(world, field)` — `worlds_snapshot: HashMap<String, [Option<String>; 5]>` on Interpreter, synced in `update_status()`; fields: host/port/type/character/mfile
 - ✓ `strip_attr(str)` — `TfStr::from_tf_markup(&s).data`
-- `encode_ansi(str)` / `decode_ansi(str)` — convert between TF attr markup and raw ANSI
-  escape sequences; used when passing strings between TF and shell commands
+- ✓ `encode_ansi(str)` / `decode_ansi(str)` — `decode_ansi` renders TfStr attrs as ANSI SGR codes; `encode_ansi` parses ESC[...m sequences into @{} markup
 - ✓ `morepaused()` — `_morepaused` global synced from `screen.paused` in `refresh_display()`
 - ✓ `morescroll(n)` — `ScriptAction::MoreScroll(i64)`; calls `screen.scroll_up/down`
 - ✓ `kblen()` — `kbhead.len() + kbtail.len()` from synced globals
 - ✓ `kbdel(n)` — `ScriptAction::KbDel(usize)`; `editor.delete_region(pos, pos+n)`
 - ✓ `kbgoto(pos)` — `ScriptAction::KbGoto(usize)`; `editor.move_to(pos)`
-- `kbmatch([pat])` — match pattern against input buffer; moderately complex
+- ✓ `kbmatch([pat])` — substring match against reconstructed buffer (kbhead+kbtail); no arg returns word-start position
 - ✓ `gethostname()` — `libc::gethostname`
 
 #### Display

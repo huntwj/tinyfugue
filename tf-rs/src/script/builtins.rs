@@ -208,6 +208,16 @@ pub fn call_builtin(name: &str, args: Vec<Value>) -> Option<Result<Value, String
                 let s = get_str(&args, 0, name)?;
                 Value::Str(crate::tfstr::TfStr::from_tf_markup(&s).data)
             }
+            "decode_ansi" => {
+                // decode_ansi(str) — convert TF @{...} markup to raw ANSI escape sequences.
+                let s = get_str(&args, 0, name)?;
+                Value::Str(decode_ansi(&s))
+            }
+            "encode_ansi" => {
+                // encode_ansi(str) — convert raw ANSI escape sequences to TF @{...} markup.
+                let s = get_str(&args, 0, name)?;
+                Value::Str(encode_ansi(&s))
+            }
 
             // ── Time functions ───────────────────────────────────────────────
             "time" => {
@@ -570,6 +580,150 @@ fn get_float(args: &[Value], idx: usize, name: &str) -> Result<f64, String> {
     args.get(idx)
         .map(|v| v.as_float())
         .ok_or_else(|| format!("{name}: argument {idx} missing"))
+}
+
+// ── ANSI conversion helpers ───────────────────────────────────────────────────
+
+/// Convert an [`Attr`] to the ANSI SGR escape sequence that represents it.
+///
+/// Always starts with a full reset (`ESC[0m`) so the caller does not need to
+/// track what was previously in effect.
+fn attr_to_ansi(attr: crate::attr::Attr) -> String {
+    use crate::attr::Attr;
+    let mut codes: Vec<String> = vec!["0".into()]; // reset
+    if attr.contains(Attr::BOLD)      { codes.push("1".into()); }
+    if attr.contains(Attr::ITALIC)    { codes.push("3".into()); }
+    if attr.contains(Attr::UNDERLINE) { codes.push("4".into()); }
+    if attr.contains(Attr::REVERSE)   { codes.push("7".into()); }
+    if let Some(fg) = attr.fg_color() {
+        if fg < 8  { codes.push(format!("{}", 30 + fg)); }
+        else       { codes.push(format!("{}", 90 + fg - 8)); }
+    }
+    if let Some(bg) = attr.bg_color() {
+        if bg < 8  { codes.push(format!("{}", 40 + bg)); }
+        else       { codes.push(format!("{}", 100 + bg - 8)); }
+    }
+    format!("\x1b[{}m", codes.join(";"))
+}
+
+/// `decode_ansi(str)` — convert TF `@{…}` markup to raw ANSI escape sequences.
+fn decode_ansi(s: &str) -> String {
+    use crate::attr::Attr;
+    use crate::tfstr::TfStr;
+    let tfstr = TfStr::from_tf_markup(s);
+    let mut out = String::new();
+    let mut cur = Attr::EMPTY;
+    for (ch, attr) in tfstr.chars_and_attrs() {
+        if attr != cur {
+            out.push_str(&attr_to_ansi(attr));
+            cur = attr;
+        }
+        out.push(ch);
+    }
+    if cur != Attr::EMPTY {
+        out.push_str("\x1b[0m");
+    }
+    out
+}
+
+/// `encode_ansi(str)` — convert raw ANSI escape sequences to TF `@{…}` markup.
+fn encode_ansi(s: &str) -> String {
+    let mut out = String::new();
+    let mut chars = s.chars().peekable();
+    // Current attribute state, represented as accumulated @{} specs.
+    let mut markup = String::new();
+
+    while let Some(ch) = chars.next() {
+        if ch != '\x1b' || chars.peek() != Some(&'[') {
+            out.push(ch);
+            continue;
+        }
+        chars.next(); // consume '['
+
+        // Collect CSI parameter bytes (digits and ';').
+        let mut param_str = String::new();
+        loop {
+            match chars.peek() {
+                Some(&c) if c.is_ascii_digit() || c == ';' => {
+                    param_str.push(c);
+                    chars.next();
+                }
+                _ => break,
+            }
+        }
+        // Consume the final byte (should be 'm' for SGR).
+        let final_byte = chars.next();
+        if final_byte != Some('m') {
+            continue; // not SGR, skip
+        }
+
+        let params: Vec<u32> = if param_str.is_empty() {
+            vec![0]
+        } else {
+            param_str.split(';').filter_map(|p| p.parse().ok()).collect()
+        };
+
+        markup.clear();
+        let mut i = 0;
+        while i < params.len() {
+            match params[i] {
+                0              => markup.push_str("@{n}"),
+                1              => markup.push_str("@{B}"),
+                3              => markup.push_str("@{i}"),
+                4              => markup.push_str("@{U}"),
+                7              => markup.push_str("@{R}"),
+                22             => {} // bold off — TF has no -B; accept silently
+                23 | 24        => {} // italic/underline off
+                27             => {} // reverse off
+                n @ 30..=37    => markup.push_str(&fg_name_markup(n - 30, false)),
+                39             => {} // default fg
+                n @ 40..=47    => markup.push_str(&bg_name_markup(n - 40, false)),
+                49             => {} // default bg
+                n @ 90..=97   => markup.push_str(&fg_name_markup(n - 90, true)),
+                n @ 100..=107 => markup.push_str(&bg_name_markup(n - 100, true)),
+                _              => {}
+            }
+            i += 1;
+        }
+        out.push_str(&markup);
+    }
+    out
+}
+
+/// Build `@{C<name>}` foreground markup for a 0-based 16-color index.
+fn fg_name_markup(idx: u32, bright: bool) -> String {
+    format!("@{{C{}}}", ansi_color_name(idx, bright))
+}
+
+/// Build `@{Cbg<name>}` background markup for a 0-based 16-color index.
+fn bg_name_markup(idx: u32, bright: bool) -> String {
+    format!("@{{Cbg{}}}", ansi_color_name(idx, bright))
+}
+
+fn ansi_color_name(idx: u32, bright: bool) -> &'static str {
+    if bright {
+        match idx {
+            0 => "gray",
+            1 => "brightred",
+            2 => "brightgreen",
+            3 => "brightyellow",
+            4 => "brightblue",
+            5 => "brightmagenta",
+            6 => "brightcyan",
+            _ => "brightwhite",
+        }
+    } else {
+        match idx {
+            0 => "black",
+            1 => "red",
+            2 => "green",
+            3 => "yellow",
+            4 => "blue",
+            5 => "magenta",
+            6 => "cyan",
+            _ => "white",
+        }
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
