@@ -1082,6 +1082,26 @@ impl EvalContext for Interpreter {
             "kbtail" => {
                 return Ok(self.globals.get("kbtail").cloned().unwrap_or_default());
             }
+            "fg_world" => {
+                return Ok(self.globals.get("fg_world").cloned().unwrap_or_default());
+            }
+            "is_open" | "is_connected" => {
+                let world = args.first().map(|v| v.to_string()).unwrap_or_default();
+                let open = self.globals.get("_open_worlds")
+                    .map(|v| v.to_string())
+                    .unwrap_or_default();
+                let found = open.split_whitespace().any(|w| w == world);
+                return Ok(Value::Int(if found { 1 } else { 0 }));
+            }
+            "nactive" => {
+                return Ok(self.globals.get("nactive").cloned().unwrap_or(Value::Int(0)));
+            }
+            "columns" => {
+                return Ok(self.globals.get("columns").cloned().unwrap_or(Value::Int(80)));
+            }
+            "winlines" | "lines" => {
+                return Ok(self.globals.get("winlines").cloned().unwrap_or(Value::Int(24)));
+            }
             // Status field introspection — parse the %status_fields variable.
             "status_fields" => {
                 return Ok(self.globals.get("status_fields").cloned().unwrap_or_default());

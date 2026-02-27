@@ -1184,9 +1184,16 @@ impl EventLoop {
     fn update_status(&mut self) {
         use std::time::{SystemTime, UNIX_EPOCH};
         let world = self.active_world.as_deref().unwrap_or("").to_owned();
-        // Keep interpreter globals in sync so worldname() / nworlds() are accurate.
+        // Keep interpreter globals in sync so worldname() / nworlds() etc. are accurate.
         self.interp.set_global_var("worldname", crate::script::Value::Str(world.clone()));
-        self.interp.set_global_var("nworlds", crate::script::Value::Int(self.handles.len() as i64));
+        self.interp.set_global_var("nworlds",   crate::script::Value::Int(self.handles.len() as i64));
+        // fg_world() is an alias for the active world name.
+        self.interp.set_global_var("fg_world",  crate::script::Value::Str(world.clone()));
+        // Space-separated list of all open world names (for is_open / is_connected).
+        let open: String = self.handles.keys().cloned().collect::<Vec<_>>().join(" ");
+        self.interp.set_global_var("_open_worlds", crate::script::Value::Str(open));
+        // nactive: all open connections count as active.
+        self.interp.set_global_var("nactive", crate::script::Value::Int(self.handles.len() as i64));
         let world = if world.is_empty() { "(no world)".to_owned() } else { world };
         let secs = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -1222,6 +1229,8 @@ impl EventLoop {
         self.sync_kb_globals();
         let scrollback = self.screen.scrollback();
         self.interp.set_global_var("moresize", crate::script::Value::Int(scrollback as i64));
+        self.interp.set_global_var("columns",  crate::script::Value::Int(self.terminal.width as i64));
+        self.interp.set_global_var("winlines", crate::script::Value::Int(self.terminal.height as i64));
         let status = self.status.clone();
         let _ = self.terminal.render_screen(&self.screen);
         let _ = self.terminal.render_status(std::slice::from_ref(&status));

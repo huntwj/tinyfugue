@@ -286,14 +286,10 @@ grouped by impact so the highest-value work is obvious at a glance.
 - ✓ `/version` — prints version string; `%version` global set at startup from `CARGO_PKG_VERSION`
 
 #### Functions
-- `fg_world()` — `tfstatus.tf` uses `fg_world() =~ ""` to detect no active world;
-  currently `worldname()` exists but `fg_world()` is a separate entry in `funclist.h`
-  (they should return the same value)
-- `is_open(world)` / `is_connected(world)` — check whether a named world has an
-  open/established connection; used extensively in multi-world scripts
-- `nactive()` — count of worlds with active (established) connections; used in status bars
-- `columns()` / `winlines()` — terminal width and height; needed for layout calculations
-  in `tfstatus.tf`, `activity_status.tf`, and user scripts
+- ✓ `fg_world()` — alias for `worldname` global; synced in `update_status()`
+- ✓ `is_open(world)` / `is_connected(world)` — check against `_open_worlds` space-separated global synced in `update_status()`
+- ✓ `nactive()` — count of open connections (= `nworlds`); synced in `update_status()`
+- ✓ `columns()` / `winlines()` / `lines()` — terminal width/height synced from `Terminal` in `refresh_display()`
 - `idle([world])` / `sidle([world])` — seconds since last keyboard input / server data;
   used in auto-away and watchdog scripts
 - `tfopen(file, mode)` / `tfread(fd)` / `tfwrite(fd, str)` / `tfclose(fd)` /
