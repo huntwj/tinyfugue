@@ -423,6 +423,12 @@ pub fn call_builtin(name: &str, args: Vec<Value>) -> Option<Result<Value, String
                 Value::Str(get_keycode(&name).unwrap_or_default())
             }
 
+            "isatty" => {
+                // isatty() — 1 if stdin is a terminal, 0 otherwise.
+                // SAFETY: isatty(3) is async-signal-safe and takes no mutable state.
+                Value::Int(unsafe { libc::isatty(libc::STDIN_FILENO) } as i64)
+            }
+
             _ => return Ok(None),
         }))
     }
@@ -1137,5 +1143,13 @@ mod tests {
         );
         // No arg → truthy
         assert_eq!(call("features", vec![]), Value::Int(1));
+    }
+
+    #[test]
+    fn isatty_returns_int() {
+        // In a test environment stdin is typically not a tty; we just check
+        // that the function returns 0 or 1 without panicking.
+        let v = call("isatty", vec![]);
+        assert!(v == Value::Int(0) || v == Value::Int(1));
     }
 }

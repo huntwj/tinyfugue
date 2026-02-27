@@ -6,7 +6,7 @@ This is a gradual, *strangler-fig* rewrite: the C binary continues to work throu
 
 **Port order follows the dependency graph**: leaf modules (no internal deps) first, core event loop last.
 
-**Status: all 15 phases complete. The Rust binary is the primary binary. 426 tests pass, zero clippy warnings.**
+**Status: all 15 phases complete. The Rust binary is the primary binary. 438 tests pass, zero clippy warnings.**
 
 ---
 
@@ -358,16 +358,15 @@ interrupt normal use.
   `features([name])` function returns 0/1; `/features [name]` command prints list or
   echoes 0/1; `%features` global set at startup.
 
-- **`/export name`** — copy a TF variable to the process environment
-  (`std::env::set_var`).  Distinct from `/setenv key=val`; used to pass TF state to
-  child processes.
+- ✓ **`/export name`** — copy a TF variable to the process environment
+  (`unsafe std::env::set_var`).  Distinct from `/setenv key=val`; used to pass TF
+  state to child processes.
 
-- **`keycode(key)`** — return the raw escape sequence for a named key (e.g.
-  `keycode("F1")`).  Needed by keybinding scripts that self-document or re-bind keys at
-  runtime.
+- ✓ **`keycode(key)`** — static xterm/VT220 escape-sequence table in builtins.rs;
+  case-insensitive; returns empty string for unknown keys.
 
-- **`isatty()`** — return 1 if stdin is a tty.  Some scripts (particularly batch-mode
-  drivers) check this before entering interactive mode.
+- ✓ **`isatty()`** — `unsafe { libc::isatty(libc::STDIN_FILENO) }`; returns 1 if
+  stdin is a terminal, 0 otherwise.
 
 #### P3 — Niche / rarely needed
 
