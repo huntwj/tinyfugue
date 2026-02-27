@@ -318,10 +318,17 @@ grouped by impact so the highest-value work is obvious at a glance.
 - ✓ `gethostname()` — `libc::gethostname`
 
 #### Display
-- Full `tfstatus.tf` named-field system — `/status_add`, `/status_rm`, `/status_edit`,
-  `/status_clear`; field-by-field evaluation of `status_int_*` / `status_var_*` exprs;
-  dynamic (`@`) field refresh on a timer tick.  High effort; replaces the current
-  `%world`/`%T`/`%t` token system entirely.
+- ✓ Full `tfstatus.tf` named-field system:
+  - `/status_add [-c] field_spec…` / `/status_rm name` / `/status_edit name spec` / `/status_clear`
+  - `StatusField { name, dynamic, width, label }` stored on EventLoop
+  - `build_status_text()` evaluates `status_int_<name>` / `status_var_<name>` globals per field via `eval_str`; spacer fields (empty name) output spaces
+  - Dynamic (`@`) fields re-evaluated on every `update_status()` call
+  - `sync_status_fields_global()` keeps `%status_fields` in sync for `status_fields()` function
+  - Falls back to `%world`/`%T`/`%t` token format when no fields defined
+  - `pad(s1, w1, s2, w2, …)` multi-pair pad/truncate (replaces old single-string stub)
+  - `limit()` → 0 (scroll-limit not implemented)
+  - `moresize(mode)` — mode `"ln"` → 0; all other modes → scrollback count
+  - `exec_stdlib` integration test passes with tfstatus.tf loaded
 
 ---
 

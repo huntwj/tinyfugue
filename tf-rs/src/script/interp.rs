@@ -115,6 +115,17 @@ pub enum ScriptAction {
     /// Move the input-editor cursor to char position `pos` (`kbgoto(pos)`).
     KbGoto(usize),
 
+    // ── Status bar field management ────────────────────────────────────────
+    /// Add fields to the status bar (`/status_add [-c] field_spec…`).
+    /// `clear` = wipe existing fields first; `raw` = unexpanded spec string.
+    StatusAdd { clear: bool, raw: String },
+    /// Remove a named field from the status bar (`/status_rm name`).
+    StatusRm(String),
+    /// Edit the width/label of an existing field (`/status_edit name spec`).
+    StatusEdit { name: String, raw: String },
+    /// Remove all status bar fields (`/status_clear`).
+    StatusClear,
+
     // ── Lua scripting (requires the `lua` Cargo feature) ──────────────────
     /// Load and execute a Lua source file (`/loadlua path`).
     #[cfg(feature = "lua")]
@@ -667,6 +678,57 @@ impl Interpreter {
                 Ok(None)
             }
 
+            // ── Status bar field management ────────────────────────────────────
+            "status_add" | "status-add" => {
+                let expanded = expand(args, self)?;
+                let mut rest = expanded.trim();
+                let mut clear = false;
+                loop {
+                    rest = rest.trim_start();
+                    if let Some(r) = rest.strip_prefix("-c") {
+                        clear = true;
+                        rest = r;
+                    } else if let Some(r) = rest.strip_prefix("-A")
+                        .or_else(|| rest.strip_prefix("-B"))
+                        .or_else(|| rest.strip_prefix("-x"))
+                    {
+                        rest = r;
+                    } else {
+                        break;
+                    }
+                }
+                // Skip bare `-` separator tokens.
+                let raw = rest.split_whitespace()
+                    .filter(|t| *t != "-")
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                self.actions.push(ScriptAction::StatusAdd { clear, raw });
+                Ok(None)
+            }
+
+            "status_rm" | "status-rm" => {
+                let expanded = expand(args, self)?;
+                let name = expanded.trim().trim_start_matches('@').to_owned();
+                self.actions.push(ScriptAction::StatusRm(name));
+                Ok(None)
+            }
+
+            "status_edit" | "status-edit" => {
+                let expanded = expand(args, self)?;
+                let trimmed = expanded.trim();
+                if let Some((name_tok, new_spec)) = trimmed.split_once(char::is_whitespace) {
+                    let name = name_tok.trim_start_matches('@').to_owned();
+                    let raw  = new_spec.trim().to_owned();
+                    self.actions.push(ScriptAction::StatusEdit { name, raw });
+                }
+                Ok(None)
+            }
+
+            "status_clear" | "status-clear" => {
+                self.actions.push(ScriptAction::StatusClear);
+                Ok(None)
+            }
+
             "shift" => {
                 // /shift [n] — drop the first n positional params (default 1).
                 let expanded = expand(args, self)?;
@@ -1133,7 +1195,19 @@ impl EvalContext for Interpreter {
                 return Ok(self.globals.get("nworlds").cloned().unwrap_or(Value::Int(0)));
             }
             "moresize" => {
-                return Ok(self.globals.get("moresize").cloned().unwrap_or(Value::Int(0)));
+                // moresize([mode]) — scrollback line count.
+                // mode "ln" = new lines since limit marker (not tracked; return 0).
+                // All other modes (including no arg) return the total scrollback count.
+                let mode = args.first().map(|v| v.to_string()).unwrap_or_default();
+                return Ok(if mode == "ln" {
+                    Value::Int(0)
+                } else {
+                    self.globals.get("moresize").cloned().unwrap_or(Value::Int(0))
+                });
+            }
+            "limit" => {
+                // limit() — returns 1 if scroll-limit is active.  Not implemented; return 0.
+                return Ok(Value::Int(0));
             }
             "kbpoint" => {
                 return Ok(self.globals.get("kbpoint").cloned().unwrap_or(Value::Int(0)));

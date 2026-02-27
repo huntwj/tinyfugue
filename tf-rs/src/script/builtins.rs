@@ -94,21 +94,32 @@ pub fn call_builtin(name: &str, args: Vec<Value>) -> Option<Result<Value, String
                 Value::Str(haystack.replace(&needle, &repl))
             }
             "pad" => {
-                // pad(str, width[, char]) — right-pad with spaces (or given char)
-                let s = get_str(&args, 0, name)?;
-                let width = get_int(&args, 1, name)? as usize;
-                let pad_c = args
-                    .get(2)
-                    .map(|v| v.as_str().chars().next().unwrap_or(' '))
-                    .unwrap_or(' ');
-                let cur = s.chars().count();
-                let padded = if cur < width {
-                    let padding: String = std::iter::repeat_n(pad_c, width - cur).collect();
-                    s + &padding
-                } else {
-                    s
-                };
-                Value::Str(padded)
+                // pad(s1, w1 [, s2, w2, ...]) — pad/truncate each si to |wi| chars and
+                // concatenate.  Positive wi = left-justify; negative wi = right-justify.
+                // This is the TF standard pad() used by tfstatus.tf for status-bar fields.
+                let mut out = String::new();
+                let mut i = 0;
+                while i + 1 < args.len() {
+                    let s     = args[i].to_string();
+                    let w     = args[i + 1].as_int();
+                    let width = w.unsigned_abs() as usize;
+                    let chars: Vec<char> = s.chars().collect();
+                    let padded: String = if chars.len() >= width {
+                        chars[..width].iter().collect()
+                    } else if w >= 0 {
+                        // left-justify: pad on right
+                        let mut r: String = chars.iter().collect();
+                        while r.chars().count() < width { r.push(' '); }
+                        r
+                    } else {
+                        // right-justify: pad on left
+                        let padding = " ".repeat(width - chars.len());
+                        format!("{padding}{}", chars.iter().collect::<String>())
+                    };
+                    out.push_str(&padded);
+                    i += 2;
+                }
+                Value::Str(out)
             }
 
             // ── Math functions ───────────────────────────────────────────────
@@ -887,16 +898,32 @@ mod tests {
     }
 
     #[test]
-    fn pad_multibyte_char() {
+    fn pad_single_pair() {
+        // pad(s, w) — left-justify s in a field of width w.
+        let v = call("pad", vec![Value::Str("hi".into()), Value::Int(5)]);
+        assert_eq!(v, Value::Str("hi   ".into()));
+    }
+
+    #[test]
+    fn pad_multi_pair() {
+        // pad(s1, w1, s2, w2) — concatenate two padded fields.
         let v = call(
             "pad",
             vec![
-                Value::Str("hi".into()),
-                Value::Int(5),
-                Value::Str("€".into()),
+                Value::Str("More".into()),
+                Value::Int(4),
+                Value::Str("42".into()),
+                Value::Int(4),
             ],
         );
-        assert_eq!(v, Value::Str("hi€€€".into()));
+        assert_eq!(v, Value::Str("More42  ".into()));
+    }
+
+    #[test]
+    fn pad_right_justify() {
+        // Negative width = right-justify.
+        let v = call("pad", vec![Value::Str("7".into()), Value::Int(-4)]);
+        assert_eq!(v, Value::Str("   7".into()));
     }
 
     #[test]

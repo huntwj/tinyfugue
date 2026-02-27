@@ -200,6 +200,67 @@ fn make_file_loader() -> FileLoader {
     })
 }
 
+// ── StatusField ───────────────────────────────────────────────────────────────
+
+/// One named column in the status bar.
+#[derive(Debug, Clone)]
+pub struct StatusField {
+    /// Column name (without the `@` prefix).  Empty = spacer.
+    pub name: String,
+    /// `true` → dynamic: expression re-evaluated on every display refresh.
+    /// `false` → static: value read from `status_var_<name>` global.
+    pub dynamic: bool,
+    /// Explicit column width in characters.  `None` = auto-width.
+    pub width: Option<usize>,
+    /// Optional label string (stored for serialisation; not yet rendered).
+    pub label: Option<String>,
+}
+
+impl StatusField {
+    /// Serialize back to the spec token form `[@]name[:width[:label]]`.
+    fn to_spec(&self) -> String {
+        let prefix = if self.dynamic { "@" } else { "" };
+        let mut s = format!("{}{}", prefix, self.name);
+        if let Some(w) = self.width {
+            s.push_str(&format!(":{w}"));
+            if let Some(ref lbl) = self.label {
+                s.push(':');
+                s.push_str(lbl);
+            }
+        }
+        s
+    }
+}
+
+/// Parse one field spec token: `[@]name[:width[:label]]`.
+///
+/// Width is the leading run of digits before any trailing flag chars such as
+/// `P3` — those flags are silently ignored.
+fn parse_field_spec(token: &str) -> StatusField {
+    let (dynamic, rest) = token.strip_prefix('@')
+        .map(|r| (true, r))
+        .unwrap_or((false, token));
+    let mut parts = rest.splitn(3, ':');
+    let name = parts.next().unwrap_or("").to_owned();
+    let width = parts.next().and_then(|s| {
+        // Accept leading digits only (ignore trailing flag chars like "P3").
+        let digits: String = s.chars().take_while(|c| c.is_ascii_digit()).collect();
+        digits.parse::<usize>().ok()
+    });
+    let label = parts.next().map(|s| s.to_owned());
+    StatusField { name, dynamic, width, label }
+}
+
+/// Parse the full argument string of `/status_add` into a list of fields.
+///
+/// Bare `-` tokens (positional separators) are skipped.
+fn parse_field_list(raw: &str) -> Vec<StatusField> {
+    raw.split_whitespace()
+        .filter(|t| *t != "-")
+        .map(parse_field_spec)
+        .collect()
+}
+
 // ── EventLoop ─────────────────────────────────────────────────────────────
 
 /// The top-level runtime: ties together all subsystems and drives them from
@@ -255,6 +316,10 @@ pub struct EventLoop {
     last_keystroke: Instant,
     /// When data was last received from any server (for `sidle()`).
     last_server_data: Instant,
+
+    /// Named status-bar fields populated by `/status_add`.
+    /// When non-empty, these replace the simple `%world`/`%T` token format.
+    status_fields: Vec<StatusField>,
 }
 
 impl EventLoop {
@@ -289,6 +354,7 @@ impl EventLoop {
             log_file: None,
             last_keystroke: Instant::now(),
             last_server_data: Instant::now(),
+            status_fields: Vec::new(),
         }
     }
 
@@ -999,6 +1065,40 @@ impl EventLoop {
                 self.input.editor.move_to(pos);
                 self.need_refresh = true;
             }
+
+            // ── Status bar field management ────────────────────────────────────
+            ScriptAction::StatusAdd { clear, raw } => {
+                if clear {
+                    self.status_fields.clear();
+                }
+                let new_fields = parse_field_list(&raw);
+                self.status_fields.extend(new_fields);
+                self.sync_status_fields_global();
+                self.need_refresh = true;
+            }
+
+            ScriptAction::StatusRm(name) => {
+                self.status_fields.retain(|f| f.name != name);
+                self.sync_status_fields_global();
+                self.need_refresh = true;
+            }
+
+            ScriptAction::StatusEdit { name, raw } => {
+                // Parse the new spec to get updated width and label.
+                let new = parse_field_spec(&raw);
+                if let Some(f) = self.status_fields.iter_mut().find(|f| f.name == name) {
+                    if new.width.is_some() { f.width = new.width; }
+                    if new.label.is_some() { f.label = new.label.clone(); }
+                }
+                self.sync_status_fields_global();
+                self.need_refresh = true;
+            }
+
+            ScriptAction::StatusClear => {
+                self.status_fields.clear();
+                self.sync_status_fields_global();
+                self.need_refresh = true;
+            }
         }
     }
 
@@ -1298,19 +1398,95 @@ impl EventLoop {
                 w.mfile.clone(),
             ]))
             .collect();
-        let world = if world.is_empty() { "(no world)".to_owned() } else { world };
-        let secs = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        let hh = (secs % 86400) / 3600;
-        let mm = (secs % 3600) / 60;
-        let ss = secs % 60;
-        let text = self.status_format
-            .replace("%world", &world)
-            .replace("%T", &format!("{hh:02}:{mm:02}"))
-            .replace("%t", &format!("{hh:02}:{mm:02}:{ss:02}"));
+        // Build the status line: use named fields if populated, else simple format.
+        let text = if self.status_fields.is_empty() {
+            let world = if world.is_empty() { "(no world)".to_owned() } else { world };
+            let secs = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let hh = (secs % 86400) / 3600;
+            let mm = (secs % 3600) / 60;
+            let ss = secs % 60;
+            self.status_format
+                .replace("%world", &world)
+                .replace("%T", &format!("{hh:02}:{mm:02}"))
+                .replace("%t", &format!("{hh:02}:{mm:02}:{ss:02}"))
+        } else {
+            self.build_status_text()
+        };
         self.status = StatusLine::new(text);
+    }
+
+    /// Rebuild the `%status_fields` global from the current field list.
+    fn sync_status_fields_global(&mut self) {
+        let spec = self.status_fields.iter()
+            .map(|f| f.to_spec())
+            .collect::<Vec<_>>()
+            .join(" ");
+        self.interp.set_global_var("status_fields", crate::script::Value::Str(spec));
+    }
+
+    /// Evaluate each status field expression and concatenate into one string.
+    ///
+    /// Dynamic fields (`@`) evaluate `status_int_<name>` or `status_var_<name>`
+    /// as a TF expression.  Static fields read `status_var_<name>` as a variable
+    /// name and return its current value.  Empty-name fields are spacers.
+    fn build_status_text(&mut self) -> String {
+        use crate::script::expr::eval_str;
+        let width = self.terminal.width as usize;
+        let fields = self.status_fields.clone();
+        let mut text = String::new();
+
+        for field in &fields {
+            if text.chars().count() >= width {
+                break;
+            }
+
+            let content = if field.name.is_empty() {
+                // Spacer field: just spaces.
+                " ".repeat(field.width.unwrap_or(1))
+            } else {
+                // Look up the expression in status_int_<name> first, then status_var_<name>.
+                let int_key = format!("status_int_{}", field.name);
+                let var_key = format!("status_var_{}", field.name);
+                let expr = self.interp.get_global_var(&int_key)
+                    .or_else(|| self.interp.get_global_var(&var_key))
+                    .map(|v: &crate::script::Value| v.to_string())
+                    .unwrap_or_default();
+
+                if expr.is_empty() {
+                    String::new()
+                } else if field.dynamic {
+                    // Dynamic: evaluate as a TF expression.
+                    eval_str(&expr, &mut self.interp)
+                        .unwrap_or_default()
+                        .to_string()
+                } else {
+                    // Static: treat expr as a variable name, return its value.
+                    self.interp.get_global_var(&expr)
+                        .map(|v: &crate::script::Value| v.to_string())
+                        .unwrap_or_default()
+                }
+            };
+
+            // Pad or truncate to the field's column width.
+            let padded = match field.width {
+                Some(w) => {
+                    let chars: Vec<char> = content.chars().collect();
+                    if chars.len() >= w {
+                        chars[..w].iter().collect()
+                    } else {
+                        let mut s: String = chars.iter().collect();
+                        while s.chars().count() < w { s.push(' '); }
+                        s
+                    }
+                }
+                None => content,
+            };
+            text.push_str(&padded);
+        }
+        text
     }
 
     /// Sync keyboard-state interpreter globals: `kbpoint`, `kbhead`, `kbtail`.
