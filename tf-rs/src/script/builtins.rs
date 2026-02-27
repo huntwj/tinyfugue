@@ -417,6 +417,12 @@ pub fn call_builtin(name: &str, args: Vec<Value>) -> Option<Result<Value, String
                 }
             }
 
+            "keycode" => {
+                // keycode(name) — return the escape sequence for a named key, or "".
+                let name = args.first().map(|v| v.to_string()).unwrap_or_default();
+                Value::Str(get_keycode(&name).unwrap_or_default())
+            }
+
             _ => return Ok(None),
         }))
     }
@@ -747,6 +753,49 @@ fn ansi_color_name(idx: u32, bright: bool) -> &'static str {
     }
 }
 
+// ── Key escape-sequence table ─────────────────────────────────────────────────
+
+/// Return the xterm/VT220 escape sequence for a named key, or `None` if unknown.
+///
+/// Sequences are returned as raw bytes (ESC = `\x1b`), matching what the
+/// terminal sends on key press.  Case-insensitive match on the key name.
+pub fn get_keycode(name: &str) -> Option<String> {
+    // Table: (name_lowercase, sequence).  Uses xterm/VT220 sequences which
+    // match what virtually all modern terminal emulators produce.
+    const TABLE: &[(&str, &str)] = &[
+        ("backspace",   "\x08"),
+        ("delete",      "\x1b[3~"),
+        ("down",        "\x1b[B"),
+        ("end",         "\x1b[F"),
+        ("f1",          "\x1bOP"),
+        ("f2",          "\x1bOQ"),
+        ("f3",          "\x1bOR"),
+        ("f4",          "\x1bOS"),
+        ("f5",          "\x1b[15~"),
+        ("f6",          "\x1b[17~"),
+        ("f7",          "\x1b[18~"),
+        ("f8",          "\x1b[19~"),
+        ("f9",          "\x1b[20~"),
+        ("f10",         "\x1b[21~"),
+        ("f11",         "\x1b[23~"),
+        ("f12",         "\x1b[24~"),
+        ("home",        "\x1b[H"),
+        ("insert",      "\x1b[2~"),
+        ("left",        "\x1b[D"),
+        ("pgdn",        "\x1b[6~"),
+        ("pgup",        "\x1b[5~"),
+        ("right",       "\x1b[C"),
+        ("up",          "\x1b[A"),
+        // Aliases used in some TF configs.
+        ("page down",   "\x1b[6~"),
+        ("page up",     "\x1b[5~"),
+    ];
+    let lower = name.to_ascii_lowercase();
+    TABLE.iter()
+        .find(|(k, _)| *k == lower.as_str())
+        .map(|(_, seq)| seq.to_string())
+}
+
 // ── Feature detection ─────────────────────────────────────────────────────────
 
 /// Return the TF feature string for this binary.
@@ -1027,6 +1076,44 @@ mod tests {
             vec![Value::Str("hello".into()), Value::Int(3), Value::Int(10)],
         );
         assert_eq!(v2, Value::Str("lo".into()));
+    }
+
+    #[test]
+    fn keycode_arrows() {
+        assert_eq!(get_keycode("Up").unwrap(), "\x1b[A");
+        assert_eq!(get_keycode("Down").unwrap(), "\x1b[B");
+        assert_eq!(get_keycode("Left").unwrap(), "\x1b[D");
+        assert_eq!(get_keycode("Right").unwrap(), "\x1b[C");
+    }
+
+    #[test]
+    fn keycode_fn_keys() {
+        assert_eq!(get_keycode("F1").unwrap(), "\x1bOP");
+        assert_eq!(get_keycode("F5").unwrap(), "\x1b[15~");
+        assert_eq!(get_keycode("F12").unwrap(), "\x1b[24~");
+    }
+
+    #[test]
+    fn keycode_case_insensitive() {
+        assert_eq!(get_keycode("pgup"), get_keycode("PgUp"));
+        assert!(get_keycode("UP").is_some());
+    }
+
+    #[test]
+    fn keycode_unknown_returns_none() {
+        assert!(get_keycode("NoSuchKey").is_none());
+    }
+
+    #[test]
+    fn keycode_builtin_fn() {
+        assert_eq!(
+            call("keycode", vec![Value::Str("Up".into())]),
+            Value::Str("\x1b[A".into())
+        );
+        assert_eq!(
+            call("keycode", vec![Value::Str("NoKey".into())]),
+            Value::Str("".into())
+        );
     }
 
     #[test]

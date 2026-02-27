@@ -1019,6 +1019,20 @@ impl Interpreter {
                 Ok(None)
             }
 
+            "export" => {
+                // /export name  — copy TF variable `name` to the process environment.
+                let expanded = expand(args, self)?;
+                let vname = expanded.trim().to_owned();
+                if let Some(val) = self.get_var(&vname) {
+                    let sval = val.to_string();
+                    // SAFETY: same single-threaded guarantee as /setenv above.
+                    unsafe { std::env::set_var(&vname, &sval); }
+                } else {
+                    self.output.push(format!("% {vname} not defined."));
+                }
+                Ok(None)
+            }
+
             "purge" => {
                 let expanded = expand(args, self)?;
                 let s = expanded.trim();
@@ -2290,5 +2304,43 @@ mod tests {
         let (ms, rest) = parse_quote_interval("/1 'file.txt");
         assert_eq!(ms, 1000);
         assert_eq!(rest, "'file.txt");
+    }
+
+    #[test]
+    fn export_sets_env_var() {
+        let mut interp = Interpreter::new();
+        interp.set_global_var("TESTEXPORT_XYZ", Value::Str("hello_world".into()));
+        interp.exec_script("/export TESTEXPORT_XYZ").unwrap();
+        assert_eq!(std::env::var("TESTEXPORT_XYZ").unwrap_or_default(), "hello_world");
+    }
+
+    #[test]
+    fn export_undefined_var_outputs_error() {
+        let mut interp = Interpreter::new();
+        interp.exec_script("/export NO_SUCH_VAR_EVER_DEFINED").unwrap();
+        assert!(!interp.output.is_empty());
+        assert!(interp.output[0].contains("not defined"));
+    }
+
+    #[test]
+    fn quote_sync_file_queues_sync_action() {
+        let mut interp = Interpreter::new();
+        interp.exec_script("/quote -S 'myfile.txt").unwrap();
+        let actions = interp.take_actions();
+        assert!(matches!(
+            &actions[0],
+            ScriptAction::QuoteFileSync { path, .. } if path == "myfile.txt"
+        ));
+    }
+
+    #[test]
+    fn quote_sync_shell_queues_sync_action() {
+        let mut interp = Interpreter::new();
+        interp.exec_script("/quote -S !echo hi").unwrap();
+        let actions = interp.take_actions();
+        assert!(matches!(
+            &actions[0],
+            ScriptAction::QuoteShellSync { command, .. } if command == "echo hi"
+        ));
     }
 }

@@ -354,9 +354,9 @@ interrupt normal use.
 
 #### P2 — Quality-of-life, missing from typical .tfrc setups
 
-- **`/features`** — print the compiled-in feature set (`%{features}` global already
-  has the string; just `/echo %{features}` plus a dedicated command).  Many `.tfrc`
-  files guard sections with `if (ismacro("features"))`.
+- ✓ **`/features`** — `tf_features_string()` / `tf_has_feature()` in builtins.rs;
+  `features([name])` function returns 0/1; `/features [name]` command prints list or
+  echoes 0/1; `%features` global set at startup.
 
 - **`/export name`** — copy a TF variable to the process environment
   (`std::env::set_var`).  Distinct from `/setenv key=val`; used to pass TF state to
