@@ -106,6 +106,14 @@ pub enum ScriptAction {
     KillProcess(u32),
     /// Inject a line as if received from the server (`fake_recv([world,] line)`).
     FakeRecv { world: Option<String>, line: String },
+    /// Remove all macros in the `MacroStore` whose name matches `pattern` (`/undefn pattern`).
+    UndefMacrosMatching(String),
+    /// Scroll the pager by `n` lines (negative = back, positive = forward) (`morescroll(n)`).
+    MoreScroll(i64),
+    /// Delete `n` characters at the cursor position in the input editor (`kbdel(n)`).
+    KbDel(usize),
+    /// Move the input-editor cursor to char position `pos` (`kbgoto(pos)`).
+    KbGoto(usize),
 
     // ── Lua scripting (requires the `lua` Cargo feature) ──────────────────
     /// Load and execute a Lua source file (`/loadlua path`).
@@ -187,6 +195,9 @@ pub struct Interpreter {
     tf_files: HashMap<i64, TfFile>,
     /// Counter for the next fd to allocate (TF uses 1-based fds).
     next_tf_fd: i64,
+    /// Snapshot of world definitions, synced by the event loop in `update_status()`.
+    /// Maps world name → `[host, port, type, character, mfile]` (all `Option<String>`).
+    pub worlds_snapshot: HashMap<String, [Option<String>; 5]>,
 }
 
 impl Default for Interpreter {
@@ -206,6 +217,7 @@ impl Interpreter {
             file_loader: None,
             tf_files: HashMap::new(),
             next_tf_fd: 1,
+            worlds_snapshot: HashMap::new(),
         }
     }
 
@@ -636,8 +648,27 @@ impl Interpreter {
             }
 
             // ── Introspection ──────────────────────────────────────────────────
-            "listworlds" | "worlds" => {
+            "listworlds" | "worlds" | "listsockets" => {
                 self.actions.push(ScriptAction::ListWorlds);
+                Ok(None)
+            }
+
+            "shift" => {
+                // /shift [n] — drop the first n positional params (default 1).
+                let expanded = expand(args, self)?;
+                let n: usize = expanded.trim().parse().unwrap_or(1).max(1);
+                if let Some(frame) = self.frames.last_mut() {
+                    let skip = n.min(frame.params.len());
+                    frame.params.drain(..skip);
+                }
+                Ok(None)
+            }
+
+            "undefn" => {
+                // /undefn pattern — bulk-remove macros whose name matches pattern.
+                let expanded = expand(args, self)?;
+                let pat = expanded.trim().to_owned();
+                self.actions.push(ScriptAction::UndefMacrosMatching(pat));
                 Ok(None)
             }
 
@@ -1225,6 +1256,57 @@ impl EvalContext for Interpreter {
                     _ => false,
                 };
                 return Ok(Value::Int(if readable { 1 } else { 0 }));
+            }
+
+            // ── World introspection ───────────────────────────────────────────
+            "world_info" => {
+                // world_info(world, field) — query a world's definition.
+                // Fields: "host", "port", "type", "character"/"char", "mfile".
+                let world = args.first().map(|v| v.to_string()).unwrap_or_default();
+                let field = args.get(1).map(|v| v.to_string()).unwrap_or_default();
+                let val = self.worlds_snapshot.get(&world).and_then(|info| {
+                    match field.as_str() {
+                        "host"                  => info[0].clone(),
+                        "port"                  => info[1].clone(),
+                        "type"                  => info[2].clone(),
+                        "character" | "char"    => info[3].clone(),
+                        "mfile"                 => info[4].clone(),
+                        _                       => None,
+                    }
+                });
+                return Ok(val.map(Value::Str).unwrap_or_default());
+            }
+
+            // ── Keyboard introspection / manipulation ─────────────────────────
+            "kblen" => {
+                // kblen() — length of the current input buffer in chars.
+                let head_len = self.globals.get("kbhead").map(|v| v.to_string().chars().count()).unwrap_or(0);
+                let tail_len = self.globals.get("kbtail").map(|v| v.to_string().chars().count()).unwrap_or(0);
+                return Ok(Value::Int((head_len + tail_len) as i64));
+            }
+            "kbdel" => {
+                // kbdel(n) — delete n chars forward from cursor; negative = backward.
+                let n = args.first().map(|v| v.as_int()).unwrap_or(1);
+                if n > 0 {
+                    self.actions.push(ScriptAction::KbDel(n as usize));
+                }
+                return Ok(Value::Int(1));
+            }
+            "kbgoto" => {
+                // kbgoto(pos) — move cursor to char position pos.
+                let pos = args.first().map(|v| v.as_int()).unwrap_or(0).max(0) as usize;
+                self.actions.push(ScriptAction::KbGoto(pos));
+                return Ok(Value::Int(1));
+            }
+
+            // ── Pager control ─────────────────────────────────────────────────
+            "morepaused" => {
+                return Ok(self.globals.get("_morepaused").cloned().unwrap_or(Value::Int(0)));
+            }
+            "morescroll" => {
+                let n = args.first().map(|v| v.as_int()).unwrap_or(1);
+                self.actions.push(ScriptAction::MoreScroll(n));
+                return Ok(Value::Int(1));
             }
 
             // ── Session counters (synced from event loop) ──────────────────────

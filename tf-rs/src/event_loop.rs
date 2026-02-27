@@ -966,6 +966,39 @@ impl EventLoop {
                 self.fire_hook_sync(hook, &line);
                 self.need_refresh = true;
             }
+
+            ScriptAction::UndefMacrosMatching(pat) => {
+                // Bulk-remove macros whose name contains `pat` (substring match).
+                let names: Vec<String> = self.macro_store.iter()
+                    .filter(|m| m.name.as_deref().map(|n| n.contains(pat.as_str())).unwrap_or(false))
+                    .filter_map(|m| m.name.clone())
+                    .collect();
+                for n in names {
+                    self.macro_store.remove_by_name(&n);
+                }
+                self.need_refresh = true;
+            }
+
+            ScriptAction::MoreScroll(n) => {
+                if n < 0 {
+                    for _ in 0..(-n) { self.screen.scroll_up(1); }
+                } else {
+                    for _ in 0..n { self.screen.scroll_down(1); }
+                }
+                self.need_refresh = true;
+            }
+
+            ScriptAction::KbDel(n) => {
+                let pos = self.input.editor.pos;
+                let end = (pos + n).min(self.input.editor.len());
+                self.input.editor.delete_region(pos, end);
+                self.need_refresh = true;
+            }
+
+            ScriptAction::KbGoto(pos) => {
+                self.input.editor.move_to(pos);
+                self.need_refresh = true;
+            }
         }
     }
 
@@ -1255,6 +1288,16 @@ impl EventLoop {
         // nlog: 1 when a log file is open, 0 otherwise.
         let nlog = self.log_file.is_some() as i64;
         self.interp.set_global_var("nlog", crate::script::Value::Int(nlog));
+        // Snapshot all world definitions for world_info() lookups.
+        self.interp.worlds_snapshot = self.worlds.iter()
+            .map(|w| (w.name.clone(), [
+                w.host.clone(),
+                w.port.clone(),
+                w.world_type.clone(),
+                w.character.clone(),
+                w.mfile.clone(),
+            ]))
+            .collect();
         let world = if world.is_empty() { "(no world)".to_owned() } else { world };
         let secs = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -1296,6 +1339,8 @@ impl EventLoop {
         let sidle_secs = self.last_server_data.elapsed().as_secs_f64();
         self.interp.set_global_var("_idle",  crate::script::Value::Float(idle_secs));
         self.interp.set_global_var("_sidle", crate::script::Value::Float(sidle_secs));
+        let morepaused = self.screen.paused as i64;
+        self.interp.set_global_var("_morepaused", crate::script::Value::Int(morepaused));
         let status = self.status.clone();
         let _ = self.terminal.render_screen(&self.screen);
         let _ = self.terminal.render_status(std::slice::from_ref(&status));

@@ -298,26 +298,25 @@ grouped by impact so the highest-value work is obvious at a glance.
 ### Medium impact — useful but not daily blockers
 
 #### Commands
-- `/listsockets` — alias for `/listworlds`; some scripts use this name
-- `/shift [n]` — drop first N positional params; used in argument-parsing macros
-- `/undefn pattern` — bulk-remove macros matching a pattern (distinct from `/undef name`)
-- `/histsize n` — already listed above (high)
+- ✓ `/listsockets` — alias for `/listworlds`
+- ✓ `/shift [n]` — drop first N positional params from current frame (`frame.params.drain(..n)`)
+- ✓ `/undefn pattern` — `ScriptAction::UndefMacrosMatching`; event loop removes all macros whose name contains the pattern
 - `/trigpc chance body` — fire body with given percent probability; used in some MUD scripts
 
 #### Functions
-- `fake_recv([world,] line)` — inject a line as if received from the server; invaluable
-  for testing triggers and hooks without a live connection
-- `nlog()` / `nmail()` / `nread()` — count of active log files / unread mail / unread
-  lines; used in status bars from `tfstatus.tf`
-- `world_info(world, field)` — query host/port/type/char for a named world
-- `strip_attr(str)` — remove TF `@{...}` markup from a string, returning plain text
+- ✓ `fake_recv([world,] line)` — `ScriptAction::FakeRecv`; processed inline in event loop via `fire_hook_sync` to avoid async recursion
+- ✓ `nlog()` / `nmail()` / `nread()` — `nlog` synced from `log_file.is_some()`; mail counts return 0
+- ✓ `world_info(world, field)` — `worlds_snapshot: HashMap<String, [Option<String>; 5]>` on Interpreter, synced in `update_status()`; fields: host/port/type/character/mfile
+- ✓ `strip_attr(str)` — `TfStr::from_tf_markup(&s).data`
 - `encode_ansi(str)` / `decode_ansi(str)` — convert between TF attr markup and raw ANSI
   escape sequences; used when passing strings between TF and shell commands
-- `morepaused()` / `morescroll(n)` — query/control the pager; needed for `status_int_more`
-  in `tfstatus.tf`
-- `kblen()` / `kbdel(n)` / `kbgoto(n)` / `kbmatch([pat])` — remaining keyboard
-  introspection and manipulation functions (complement to `kbpoint`/`kbhead`/`kbtail`)
-- `gethostname()` — return the local hostname; used in scripts that tag log files
+- ✓ `morepaused()` — `_morepaused` global synced from `screen.paused` in `refresh_display()`
+- ✓ `morescroll(n)` — `ScriptAction::MoreScroll(i64)`; calls `screen.scroll_up/down`
+- ✓ `kblen()` — `kbhead.len() + kbtail.len()` from synced globals
+- ✓ `kbdel(n)` — `ScriptAction::KbDel(usize)`; `editor.delete_region(pos, pos+n)`
+- ✓ `kbgoto(pos)` — `ScriptAction::KbGoto(usize)`; `editor.move_to(pos)`
+- `kbmatch([pat])` — match pattern against input buffer; moderately complex
+- ✓ `gethostname()` — `libc::gethostname`
 
 #### Display
 - Full `tfstatus.tf` named-field system — `/status_add`, `/status_rm`, `/status_edit`,
