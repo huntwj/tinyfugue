@@ -250,6 +250,11 @@ pub struct EventLoop {
     /// Format string for the status bar.  Tokens: `%world`, `%T` (HH:MM),
     /// `%t` (HH:MM:SS).  Defaults to `"[ %world ]  %T"`.
     status_format: String,
+
+    /// When the user last pressed a key (for `idle()`).
+    last_keystroke: Instant,
+    /// When data was last received from any server (for `sidle()`).
+    last_server_data: Instant,
 }
 
 impl EventLoop {
@@ -282,6 +287,8 @@ impl EventLoop {
             status_format: "[ %world ]  %T".to_owned(),
             need_refresh: false,
             log_file: None,
+            last_keystroke: Instant::now(),
+            last_server_data: Instant::now(),
         }
     }
 
@@ -398,6 +405,7 @@ impl EventLoop {
                     match result {
                         Ok(0) | Err(_) => self.quit = true,
                         Ok(n) => {
+                            self.last_keystroke = Instant::now();
                             for &b in &stdin_buf[..n] {
                                 if let Some(action) = self.key_decoder.push(b) {
                                     // Intercept scrollback ops before the editor.
@@ -962,6 +970,7 @@ impl EventLoop {
 
         match msg.event {
             NetEvent::Line(bytes) => {
+                self.last_server_data = Instant::now();
                 let text = String::from_utf8_lossy(&bytes).into_owned();
 
                 // Trigger matching.
@@ -1231,6 +1240,10 @@ impl EventLoop {
         self.interp.set_global_var("moresize", crate::script::Value::Int(scrollback as i64));
         self.interp.set_global_var("columns",  crate::script::Value::Int(self.terminal.width as i64));
         self.interp.set_global_var("winlines", crate::script::Value::Int(self.terminal.height as i64));
+        let idle_secs  = self.last_keystroke.elapsed().as_secs_f64();
+        let sidle_secs = self.last_server_data.elapsed().as_secs_f64();
+        self.interp.set_global_var("_idle",  crate::script::Value::Float(idle_secs));
+        self.interp.set_global_var("_sidle", crate::script::Value::Float(sidle_secs));
         let status = self.status.clone();
         let _ = self.terminal.render_screen(&self.screen);
         let _ = self.terminal.render_status(std::slice::from_ref(&status));

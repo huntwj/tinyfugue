@@ -290,8 +290,7 @@ grouped by impact so the highest-value work is obvious at a glance.
 - ✓ `is_open(world)` / `is_connected(world)` — check against `_open_worlds` space-separated global synced in `update_status()`
 - ✓ `nactive()` — count of open connections (= `nworlds`); synced in `update_status()`
 - ✓ `columns()` / `winlines()` / `lines()` — terminal width/height synced from `Terminal` in `refresh_display()`
-- `idle([world])` / `sidle([world])` — seconds since last keyboard input / server data;
-  used in auto-away and watchdog scripts
+- ✓ `idle()` / `sidle()` — `last_keystroke` / `last_server_data` `Instant` fields on `EventLoop`, updated on each keystroke / incoming line; elapsed seconds synced to `_idle` / `_sidle` globals in `refresh_display()`
 - `tfopen(file, mode)` / `tfread(fd)` / `tfwrite(fd, str)` / `tfclose(fd)` /
   `tfflush(fd)` / `tfreadable(fd)` — file I/O API; used in logging, history-save,
   and data-export scripts

@@ -1082,6 +1082,12 @@ impl EvalContext for Interpreter {
             "kbtail" => {
                 return Ok(self.globals.get("kbtail").cloned().unwrap_or_default());
             }
+            "idle" => {
+                return Ok(self.globals.get("_idle").cloned().unwrap_or(Value::Float(0.0)));
+            }
+            "sidle" => {
+                return Ok(self.globals.get("_sidle").cloned().unwrap_or(Value::Float(0.0)));
+            }
             "fg_world" => {
                 return Ok(self.globals.get("fg_world").cloned().unwrap_or_default());
             }
