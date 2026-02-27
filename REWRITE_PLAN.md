@@ -6,7 +6,7 @@ This is a gradual, *strangler-fig* rewrite: the C binary continues to work throu
 
 **Port order follows the dependency graph**: leaf modules (no internal deps) first, core event loop last.
 
-**Status: all 15 phases complete. The Rust binary is the primary binary. 409 tests pass, zero clippy warnings.**
+**Status: all 15 phases complete. The Rust binary is the primary binary. 426 tests pass, zero clippy warnings.**
 
 ---
 
@@ -268,6 +268,11 @@ grouped by impact so the highest-value work is obvious at a glance.
 - `status_fields()` / `status_width()` / `status_label()` — ✓ parse `%status_fields`
 - `worldname()` / `nworlds()` — ✓ live event-loop state via globals
 - Bare `tf` invocation with no world — ✓ starts idle cleanly
+- `insert` global — ✓ synced from `LineEditor.insert_mode` in `sync_kb_globals()`
+- `kbnum` global — ✓ synced (always 0; numeric-prefix UI not implemented)
+- `ismacro()` for `/def` macros — ✓ `macro_names: HashSet<String>` on Interpreter; populated at all three `ScriptAction::DefMacro` processing sites in event loop
+- `/recordline str` — ✓ `ScriptAction::RecordLine`; handled by `input.history.record()` — fixes stdlib.tf log replay and savehist paths
+- `build_status_text()` static field evaluation — ✓ now calls `eval_str()` so TF expressions (e.g. `insert ? "" : "(Over)"`) evaluate correctly
 
 ---
 
@@ -332,17 +337,58 @@ grouped by impact so the highest-value work is obvious at a glance.
 
 ---
 
-### Low impact — niche or rarely needed
+### Remaining work — prioritized
 
-- MCP (MUD Client Protocol) — complex, only a handful of servers use it
-- `/features` — print compiled-in feature flags; trivial to add but rarely queried
-- `/export name` — copy interpreter variable to `std::env`; `/setenv` covers most uses
-- `/restrict level` — lock down dangerous commands; not needed for personal use
-- `/suspend` — send `SIGSTOP` to self; job-control relic
-- `/recordline str` — manually append a line to input history
-- `/listsockets` — duplicate of `/listworlds`
-- `/watchdog interval` / `/watchname name` — reconnect-on-silence; useful but
-  implementable as a `/repeat` script
-- `option102([world,] on/off)` — niche telnet option; only relevant to specific servers
-- `isatty()` — check if stdin is a tty; rarely needed
-- `keycode(key)` — look up raw escape sequence for a key name
+The binary is in daily use. Remaining items are sorted by how likely they are to
+interrupt normal use.
+
+#### P1 — Will break scripts in the wild
+
+- **`/quote -S` flag** — synchronous (blocking) quote; currently the flag is silently
+  ignored and the quote runs async.  Some scripts that expect synchronous playback will
+  behave incorrectly.  Implementation: drain the file line-by-line in the event loop
+  iteration instead of handing it to `ProcessScheduler`.
+
+- **`/watchdog interval` / `/watchname name`** — auto-reconnect when no data is
+  received for `interval` seconds.  Commonly used in `.tfrc` / world files; without it
+  dropped connections require a manual `/connect`.  Implementation: `last_server_data`
+  `Instant` already tracked on `EventLoop`; add a timer arm that fires `connect()` when
+  elapsed > watchdog interval.
+
+#### P2 — Quality-of-life, missing from typical .tfrc setups
+
+- **`/features`** — print the compiled-in feature set (`%{features}` global already
+  has the string; just `/echo %{features}` plus a dedicated command).  Many `.tfrc`
+  files guard sections with `if (ismacro("features"))`.
+
+- **`/export name`** — copy a TF variable to the process environment
+  (`std::env::set_var`).  Distinct from `/setenv key=val`; used to pass TF state to
+  child processes.
+
+- **`keycode(key)`** — return the raw escape sequence for a named key (e.g.
+  `keycode("F1")`).  Needed by keybinding scripts that self-document or re-bind keys at
+  runtime.
+
+- **`isatty()`** — return 1 if stdin is a tty.  Some scripts (particularly batch-mode
+  drivers) check this before entering interactive mode.
+
+#### P3 — Niche / rarely needed
+
+- **`/restrict level`** — lock down dangerous commands (file I/O, shell, network).
+  Only needed when TF is run in a shared or untrusted environment.
+
+- **`/suspend`** — send `SIGSTOP` to self; a job-control relic that requires leaving
+  raw mode, raising SIGSTOP, then re-entering raw mode and repainting on SIGCONT.
+
+- **`option102([world,] on/off)`** — niche telnet option; only relevant to a handful
+  of specific servers.
+
+- **MCP (MUD Client Protocol)** — complex bidirectional OOB protocol; only a handful
+  of servers still use it.
+
+#### Architecture / correctness notes
+
+- `kbnum` numeric-prefix UI is not implemented; `%kbnum` is always 0.  The only
+  visible effect is that `M-<digit>` prefixes before editing commands are ignored.
+- `/quote -S` is the only stdlib-reachable issue that can silently produce wrong
+  results (all others either error-out or no-op visibly).
