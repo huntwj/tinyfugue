@@ -383,7 +383,10 @@ impl EventLoop {
             // Quit/Connect/Disconnect are deferred until after startup.
             match action {
                 ScriptAction::AddWorld(w) => { self.worlds.upsert(w); }
-                ScriptAction::DefMacro(mac) => { self.macro_store.add(mac); }
+                ScriptAction::DefMacro(mac) => {
+                    if let Some(n) = &mac.name { self.interp.macro_names.insert(n.clone()); }
+                    self.macro_store.add(mac);
+                }
                 _ => {}
             }
         }
@@ -625,6 +628,7 @@ impl EventLoop {
             }
 
             ScriptAction::DefMacro(mac) => {
+                if let Some(n) = &mac.name { self.interp.macro_names.insert(n.clone()); }
                 let _ = self.macro_store.add(mac);
             }
 
@@ -829,6 +833,10 @@ impl EventLoop {
             ScriptAction::SetInput(text) => {
                 self.input.editor.set_text(&text);
                 self.need_refresh = true;
+            }
+
+            ScriptAction::RecordLine(line) => {
+                self.input.history.record(&line);
             }
 
             ScriptAction::SetStatus(fmt) => {
@@ -1246,7 +1254,10 @@ impl EventLoop {
                 for action in self.interp.take_actions() {
                     match action {
                         ScriptAction::AddWorld(w) => { self.worlds.upsert(w); }
-                        ScriptAction::DefMacro(mac) => { self.macro_store.add(mac); }
+                        ScriptAction::DefMacro(mac) => {
+                            if let Some(n) = &mac.name { self.interp.macro_names.insert(n.clone()); }
+                            self.macro_store.add(mac);
+                        }
                         ScriptAction::Quit => { self.quit = true; }
                         _ => {} // Connect/Disconnect/Send deferred
                     }
@@ -1463,10 +1474,10 @@ impl EventLoop {
                         .unwrap_or_default()
                         .to_string()
                 } else {
-                    // Static: treat expr as a variable name, return its value.
-                    self.interp.get_global_var(&expr)
-                        .map(|v: &crate::script::Value| v.to_string())
+                    // Static: evaluate the expression (e.g. TF ternary/function calls).
+                    eval_str(&expr, &mut self.interp)
                         .unwrap_or_default()
+                        .to_string()
                 }
             };
 
@@ -1501,6 +1512,9 @@ impl EventLoop {
         self.interp.set_global_var("kbpoint", Value::Int(pos as i64));
         self.interp.set_global_var("kbhead",  Value::Str(head));
         self.interp.set_global_var("kbtail",  Value::Str(tail));
+        self.interp.set_global_var("insert",  Value::Int(self.input.editor.insert_mode as i64));
+        // kbnum: numeric prefix (M-<digit> prefix count); not yet implemented, always 0.
+        self.interp.set_global_var("kbnum", Value::Int(0));
     }
 
     /// Render the screen, status bar, and input line, then flush.

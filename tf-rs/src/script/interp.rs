@@ -5,7 +5,7 @@
 //! expression evaluator can call back into it for variable lookups and
 //! function calls.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::hook::{Hook, HookSet};
@@ -125,6 +125,8 @@ pub enum ScriptAction {
     StatusEdit { name: String, raw: String },
     /// Remove all status bar fields (`/status_clear`).
     StatusClear,
+    /// Add a line to the input history (`/recordline line`).
+    RecordLine(String),
 
     // ── Lua scripting (requires the `lua` Cargo feature) ──────────────────
     /// Load and execute a Lua source file (`/loadlua path`).
@@ -209,6 +211,8 @@ pub struct Interpreter {
     /// Snapshot of world definitions, synced by the event loop in `update_status()`.
     /// Maps world name → `[host, port, type, character, mfile]` (all `Option<String>`).
     pub worlds_snapshot: HashMap<String, [Option<String>; 5]>,
+    /// Names of macros added via `/def` (via `ScriptAction::DefMacro`), used by `ismacro()`.
+    pub macro_names: HashSet<String>,
 }
 
 impl Default for Interpreter {
@@ -229,6 +233,7 @@ impl Interpreter {
             tf_files: HashMap::new(),
             next_tf_fd: 1,
             worlds_snapshot: HashMap::new(),
+            macro_names: HashSet::new(),
         }
     }
 
@@ -984,6 +989,12 @@ impl Interpreter {
                 Ok(None)
             }
 
+            "recordline" => {
+                let expanded = expand(args, self)?;
+                self.actions.push(ScriptAction::RecordLine(expanded));
+                Ok(None)
+            }
+
             "dokey" => {
                 // /dokey <op>  — apply a built-in key operation to the input editor.
                 let expanded = expand(args, self)?;
@@ -1185,7 +1196,7 @@ impl EvalContext for Interpreter {
             }
             "ismacro" => {
                 let mname = args.first().map(|v| v.to_string()).unwrap_or_default();
-                let exists = self.macros.contains_key(&mname);
+                let exists = self.macros.contains_key(&mname) || self.macro_names.contains(&mname);
                 return Ok(Value::Int(if exists { 1 } else { 0 }));
             }
             "worldname" => {
