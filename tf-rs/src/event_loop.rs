@@ -917,6 +917,55 @@ impl EventLoop {
                 }
                 self.need_refresh = true;
             }
+
+            ScriptAction::FakeRecv { world, line } => {
+                // Inject a synthetic received line.  We process it inline
+                // (via fire_hook_sync) rather than calling handle_net_message
+                // to avoid an async recursion cycle.
+                let world_name = world.unwrap_or_else(|| {
+                    self.active_world.clone().unwrap_or_default()
+                });
+                let is_active = self.active_world.as_deref() == Some(world_name.as_str());
+
+                // Trigger matching.
+                let actions = self.macro_store.find_triggers(&line, Some(world_name.as_str()));
+                let gagged = actions.iter().any(|a| a.gag);
+                let merged_attr = actions.iter().fold(Attr::EMPTY, |acc, a| acc | a.attr);
+
+                if !gagged {
+                    let ll = if merged_attr == Attr::EMPTY {
+                        LogicalLine::plain(&line)
+                    } else {
+                        LogicalLine::new(
+                            { let mut t = crate::tfstr::TfStr::new(); t.push_str(&line, None); t },
+                            merged_attr,
+                        )
+                    };
+                    self.screen.push_line(ll);
+                    if let Some(ref mut f) = self.log_file {
+                        use std::io::Write;
+                        let _ = writeln!(f, "{line}");
+                    }
+                }
+
+                // Execute trigger bodies inline.
+                for ta in &actions {
+                    if let Some(body) = &ta.body {
+                        if let Err(e) = self.interp.exec_script(body) {
+                            let m = format!("% Trigger error: {e}");
+                            self.screen.push_line(LogicalLine::plain(&m));
+                        }
+                        for out in self.interp.output.drain(..) {
+                            let content = crate::tfstr::TfStr::from_tf_markup(&out);
+                            self.screen.push_line(LogicalLine::new(content, Attr::EMPTY));
+                        }
+                    }
+                }
+
+                let hook = if is_active { Hook::Activity } else { Hook::BgText };
+                self.fire_hook_sync(hook, &line);
+                self.need_refresh = true;
+            }
         }
     }
 
@@ -1203,6 +1252,9 @@ impl EventLoop {
         self.interp.set_global_var("_open_worlds", crate::script::Value::Str(open));
         // nactive: all open connections count as active.
         self.interp.set_global_var("nactive", crate::script::Value::Int(self.handles.len() as i64));
+        // nlog: 1 when a log file is open, 0 otherwise.
+        let nlog = self.log_file.is_some() as i64;
+        self.interp.set_global_var("nlog", crate::script::Value::Int(nlog));
         let world = if world.is_empty() { "(no world)".to_owned() } else { world };
         let secs = SystemTime::now()
             .duration_since(UNIX_EPOCH)

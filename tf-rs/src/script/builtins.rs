@@ -194,6 +194,20 @@ pub fn call_builtin(name: &str, args: Vec<Value>) -> Option<Result<Value, String
             "getpid" => {
                 Value::Int(std::process::id() as i64)
             }
+            "gethostname" => {
+                let mut buf = [0u8; 256];
+                let name = unsafe {
+                    libc::gethostname(buf.as_mut_ptr() as *mut libc::c_char, buf.len());
+                    let len = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+                    String::from_utf8_lossy(&buf[..len]).into_owned()
+                };
+                Value::Str(name)
+            }
+            "strip_attr" => {
+                // strip_attr(str) — remove TF @{...} markup, return plain text.
+                let s = get_str(&args, 0, name)?;
+                Value::Str(crate::tfstr::TfStr::from_tf_markup(&s).data)
+            }
 
             // ── Time functions ───────────────────────────────────────────────
             "time" => {

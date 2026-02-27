@@ -104,6 +104,8 @@ pub enum ScriptAction {
     ListProcesses,
     /// Kill a scheduled process by ID (`/kill id`).
     KillProcess(u32),
+    /// Inject a line as if received from the server (`fake_recv([world,] line)`).
+    FakeRecv { world: Option<String>, line: String },
 
     // ── Lua scripting (requires the `lua` Cargo feature) ──────────────────
     /// Load and execute a Lua source file (`/loadlua path`).
@@ -1223,6 +1225,32 @@ impl EvalContext for Interpreter {
                     _ => false,
                 };
                 return Ok(Value::Int(if readable { 1 } else { 0 }));
+            }
+
+            // ── Session counters (synced from event loop) ──────────────────────
+            "nlog" => {
+                return Ok(self.globals.get("nlog").cloned().unwrap_or(Value::Int(0)));
+            }
+            "nmail" => {
+                // Mail checking not implemented; return safe default.
+                return Ok(Value::Int(0));
+            }
+            "nread" => {
+                // Unread-mail count not implemented; return safe default.
+                return Ok(Value::Int(0));
+            }
+
+            // ── Server injection ───────────────────────────────────────────────
+            "fake_recv" => {
+                // fake_recv([world,] line) — inject a line as if from the server.
+                // If two args are given, first is the world name.
+                let (world, line) = if args.len() >= 2 {
+                    (Some(args[0].to_string()), args[1].to_string())
+                } else {
+                    (None, args.first().map(|v| v.to_string()).unwrap_or_default())
+                };
+                self.actions.push(ScriptAction::FakeRecv { world, line });
+                return Ok(Value::Int(1));
             }
 
             _ => {}
