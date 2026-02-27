@@ -407,6 +407,16 @@ pub fn call_builtin(name: &str, args: Vec<Value>) -> Option<Result<Value, String
                 // ismacro(name) → 0 (conservative stub; no macro store access here)
                 Value::Int(0)
             }
+            "features" => {
+                // features([name]) — if name given, return 1 if that feature is
+                // enabled; with no argument return 1 (truthy; caller should use
+                // the /features command to print the list).
+                match args.first() {
+                    Some(v) => Value::Int(tf_has_feature(&v.to_string()) as i64),
+                    None    => Value::Int(1), // "features supported"
+                }
+            }
+
             _ => return Ok(None),
         }))
     }
@@ -737,6 +747,40 @@ fn ansi_color_name(idx: u32, bright: bool) -> &'static str {
     }
 }
 
+// ── Feature detection ─────────────────────────────────────────────────────────
+
+/// Return the TF feature string for this binary.
+///
+/// Format mirrors C TF: space-separated `+name` (enabled) or `-name` (disabled).
+pub fn tf_features_string() -> String {
+    let mut parts: Vec<&str> = vec![
+        "+core",
+        "+float",
+        "+ftime",
+        "+history",
+        "+MCCPv2",
+        "-MCCPv1",
+        "+process",
+        "+ssl",
+        "+subsecond",
+        "+256colors",
+        "-IPv6",
+        "-locale",
+        "-SOCKS",
+        "-TZ",
+    ];
+    if cfg!(feature = "lua")    { parts.push("+lua");    } else { parts.push("-lua");    }
+    if cfg!(feature = "python") { parts.push("+python"); } else { parts.push("-python"); }
+    parts.join(" ")
+}
+
+/// Return `true` if the named feature is enabled in this binary.
+pub fn tf_has_feature(name: &str) -> bool {
+    let s = tf_features_string();
+    let target = format!("+{name}");
+    s.split_whitespace().any(|t| t.eq_ignore_ascii_case(&target))
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -983,5 +1027,28 @@ mod tests {
             vec![Value::Str("hello".into()), Value::Int(3), Value::Int(10)],
         );
         assert_eq!(v2, Value::Str("lo".into()));
+    }
+
+    #[test]
+    fn features_core_always_enabled() {
+        assert!(tf_has_feature("core"));
+        assert!(tf_has_feature("ssl"));
+        assert!(tf_has_feature("256colors"));
+        assert!(!tf_has_feature("SOCKS"));
+        assert!(!tf_has_feature("nonexistent"));
+    }
+
+    #[test]
+    fn features_fn_returns_int() {
+        assert_eq!(
+            call("features", vec![Value::Str("core".into())]),
+            Value::Int(1)
+        );
+        assert_eq!(
+            call("features", vec![Value::Str("SOCKS".into())]),
+            Value::Int(0)
+        );
+        // No arg → truthy
+        assert_eq!(call("features", vec![]), Value::Int(1));
     }
 }

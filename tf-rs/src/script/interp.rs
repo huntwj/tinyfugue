@@ -895,6 +895,22 @@ impl Interpreter {
             // config files that contain them don't produce errors.
             "visual" | "mode" | "redraw" | "localecho" => Ok(None),
 
+            "features" => {
+                // /features [name]
+                //   • No arg: print the feature string.
+                //   • With a name: echo "1" or "0" (function form via call_fn handles
+                //     the return-value path; this is the command-line output path).
+                use super::builtins::{tf_features_string, tf_has_feature};
+                let arg = expand(args, self)?.trim().to_owned();
+                if arg.is_empty() {
+                    self.output.push(tf_features_string());
+                } else {
+                    let yn = tf_has_feature(&arg) as i64;
+                    self.output.push(yn.to_string());
+                }
+                Ok(None)
+            }
+
             "version" => {
                 self.output.push(format!(
                     "% TinyFugue (Rust) version {}",

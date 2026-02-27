@@ -1,5 +1,6 @@
 use tf::cli::{self, ConfigFile, ConnectTarget};
 use tf::event_loop::EventLoop;
+use tf::script::builtins::tf_features_string;
 use tf::script::value::Value;
 
 #[tokio::main]
@@ -24,6 +25,9 @@ async fn main() {
     event_loop
         .interp
         .set_global_var("version", Value::Str(env!("CARGO_PKG_VERSION").to_owned()));
+    event_loop
+        .interp
+        .set_global_var("features", Value::Str(tf_features_string()));
 
     // ── Set TFLIBDIR in the interpreter ───────────────────────────────────────
     let libdir = cli::resolve_libdir(args.libdir.as_ref());

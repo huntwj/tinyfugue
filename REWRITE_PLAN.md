@@ -344,16 +344,13 @@ interrupt normal use.
 
 #### P1 — Will break scripts in the wild
 
-- **`/quote -S` flag** — synchronous (blocking) quote; currently the flag is silently
-  ignored and the quote runs async.  Some scripts that expect synchronous playback will
-  behave incorrectly.  Implementation: drain the file line-by-line in the event loop
-  iteration instead of handing it to `ProcessScheduler`.
-
-- **`/watchdog interval` / `/watchname name`** — auto-reconnect when no data is
-  received for `interval` seconds.  Commonly used in `.tfrc` / world files; without it
-  dropped connections require a manual `/connect`.  Implementation: `last_server_data`
-  `Instant` already tracked on `EventLoop`; add a timer arm that fires `connect()` when
-  elapsed > watchdog interval.
+- ✓ **`/quote -S` flag** — `ScriptAction::QuoteFileSync` / `QuoteShellSync`; event loop
+  reads the entire file (or shell output) and sends all lines immediately without
+  scheduling.
+- ✓ **`/watchdog n` / `/watchname name`** — `watchdog_interval: Option<Duration>` +
+  `watchdog_world: Option<String>` on EventLoop; `last_data_per_world: HashMap<String,
+  Instant>` updated per line received; `check_watchdog()` called from timer arm;
+  `watchdog_deadline()` included in select! sleep deadline.
 
 #### P2 — Quality-of-life, missing from typical .tfrc setups
 
