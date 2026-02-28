@@ -28,6 +28,8 @@ use std::io;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use libc;
+
 use tokio::io::AsyncReadExt;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::mpsc;
@@ -900,6 +902,32 @@ impl EventLoop {
                 self.watchdog_world = if name.is_empty() { None } else { Some(name) };
             }
 
+            ScriptAction::Suspend => {
+                // Leave raw mode, stop the process, re-enter raw mode on resume.
+                crossterm::terminal::disable_raw_mode().ok();
+                // SAFETY: raise(3) is async-signal-safe; SIGSTOP cannot be caught.
+                unsafe { libc::raise(libc::SIGSTOP); }
+                // We resume here after SIGCONT.
+                crossterm::terminal::enable_raw_mode().ok();
+                self.refresh_display();
+            }
+
+            ScriptAction::Option102 { data, world } => {
+                let target = world.or_else(|| self.active_world.clone());
+                if let Some(w) = target {
+                    if let Some(handle) = self.handles.get(&w) {
+                        let mut pkt = vec![
+                            crate::telnet::IAC,
+                            crate::telnet::SB,
+                            crate::telnet::opt::OPT102,
+                        ];
+                        pkt.extend_from_slice(&data);
+                        pkt.extend_from_slice(&[crate::telnet::IAC, crate::telnet::SE]);
+                        handle.send_raw(pkt).await;
+                    }
+                }
+            }
+
             ScriptAction::SetStatus(fmt) => {
                 self.status_format = fmt;
                 self.update_status();
@@ -1278,6 +1306,9 @@ impl EventLoop {
             NetEvent::Atcp(func, val) => {
                 let arg = format!("{func} {val}");
                 self.fire_hook(Hook::Atcp, &arg).await;
+            }
+            NetEvent::Opt102(payload) => {
+                self.fire_hook(Hook::Option102, &payload).await;
             }
             NetEvent::Closed => {
                 let was_active = self.active_world.as_deref() == Some(&msg.world);

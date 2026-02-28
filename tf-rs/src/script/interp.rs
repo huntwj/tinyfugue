@@ -136,6 +136,11 @@ pub enum ScriptAction {
     /// Set which world the watchdog monitors (`/watchname [name]`; empty = active world).
     SetWatchName(String),
 
+    /// Suspend the process (leave raw mode, SIGSTOP, resume, repaint) (`/suspend`).
+    Suspend,
+    /// Send an option-102 subnegotiation to a world (`option102([world,] data)`).
+    Option102 { data: Vec<u8>, world: Option<String> },
+
     // ── Lua scripting (requires the `lua` Cargo feature) ──────────────────
     /// Load and execute a Lua source file (`/loadlua path`).
     #[cfg(feature = "lua")]
@@ -160,6 +165,23 @@ pub enum ScriptAction {
     /// Destroy the Python interpreter (`/killpython`).
     #[cfg(feature = "python")]
     PythonKill,
+}
+
+// ── Restriction level ─────────────────────────────────────────────────────────
+
+/// Command-restriction level set by `/restrict`.
+///
+/// Can only be raised, not lowered.  Mirrors the C `restriction` global.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub enum RestrictionLevel {
+    #[default]
+    None  = 0,
+    /// No shell access (`/sh`, `/quote !cmd`).
+    Shell = 1,
+    /// + no file I/O (`/load`, `/log`, `/nolog`, `/save`).
+    File  = 2,
+    /// + no network commands (`/connect`, `/disconnect`).
+    World = 3,
 }
 
 // ── File loader callback ──────────────────────────────────────────────────────
@@ -221,6 +243,8 @@ pub struct Interpreter {
     pub worlds_snapshot: HashMap<String, [Option<String>; 5]>,
     /// Names of macros added via `/def` (via `ScriptAction::DefMacro`), used by `ismacro()`.
     pub macro_names: HashSet<String>,
+    /// Current restriction level (set by `/restrict`; can only increase).
+    pub restriction: RestrictionLevel,
 }
 
 impl Default for Interpreter {
@@ -242,6 +266,7 @@ impl Interpreter {
             next_tf_fd: 1,
             worlds_snapshot: HashMap::new(),
             macro_names: HashSet::new(),
+            restriction: RestrictionLevel::None,
         }
     }
 
@@ -481,6 +506,10 @@ impl Interpreter {
             // ── File loading ───────────────────────────────────────────────────
             "load" => {
                 // /load [-q] [-L <dir>] <file>
+                if self.restriction >= RestrictionLevel::File {
+                    self.output.push("% restricted".to_owned());
+                    return Ok(None);
+                }
                 // Expand args FIRST (e.g. %{-L} %{L} in the `require` macro),
                 // THEN parse flags so that -q/-L embedded via expansion are seen.
                 let expanded = expand(args, self)?;
@@ -555,12 +584,20 @@ impl Interpreter {
             }
 
             "connect" | "fg" => {
+                if self.restriction >= RestrictionLevel::World {
+                    self.output.push("% restricted".to_owned());
+                    return Ok(None);
+                }
                 let expanded = expand(args, self)?;
                 self.actions.push(ScriptAction::Connect { name: expanded.trim().to_owned() });
                 Ok(None)
             }
 
             "disconnect" | "dc" => {
+                if self.restriction >= RestrictionLevel::World {
+                    self.output.push("% restricted".to_owned());
+                    return Ok(None);
+                }
                 let expanded = expand(args, self)?;
                 self.actions.push(ScriptAction::Disconnect {
                     name: expanded.trim().to_owned(),
@@ -687,7 +724,9 @@ impl Interpreter {
                         });
                     }
                 } else if let Some(cmd) = rest.strip_prefix('!') {
-                    if sync {
+                    if self.restriction >= RestrictionLevel::Shell {
+                        self.output.push("% restricted".to_owned());
+                    } else if sync {
                         self.actions.push(ScriptAction::QuoteShellSync {
                             command: cmd.to_owned(),
                             world: None,
@@ -810,6 +849,10 @@ impl Interpreter {
 
             // ── Logging ───────────────────────────────────────────────────────
             "log" => {
+                if self.restriction >= RestrictionLevel::File {
+                    self.output.push("% restricted".to_owned());
+                    return Ok(None);
+                }
                 let expanded = expand(args, self)?;
                 let path = expanded.trim();
                 if path.is_empty() {
@@ -821,6 +864,10 @@ impl Interpreter {
             }
 
             "nolog" => {
+                if self.restriction >= RestrictionLevel::File {
+                    self.output.push("% restricted".to_owned());
+                    return Ok(None);
+                }
                 self.actions.push(ScriptAction::StopLog);
                 Ok(None)
             }
@@ -852,6 +899,10 @@ impl Interpreter {
             }
 
             "save" => {
+                if self.restriction >= RestrictionLevel::File {
+                    self.output.push("% restricted".to_owned());
+                    return Ok(None);
+                }
                 let expanded = expand(args, self)?;
                 let s = expanded.trim();
                 let path = if s.is_empty() { None } else { Some(s.to_owned()) };
@@ -926,6 +977,10 @@ impl Interpreter {
             }
 
             "sh" => {
+                if self.restriction >= RestrictionLevel::Shell {
+                    self.output.push("% restricted".to_owned());
+                    return Ok(None);
+                }
                 let cmd = args.trim();
                 if cmd.is_empty() {
                     self.actions.push(ScriptAction::ShellInteractive);
@@ -1063,6 +1118,63 @@ impl Interpreter {
             "watchname" => {
                 let expanded = expand(args, self)?;
                 self.actions.push(ScriptAction::SetWatchName(expanded.trim().to_owned()));
+                Ok(None)
+            }
+
+            "restrict" => {
+                // /restrict [none|shell|file|world]
+                // With no arg, prints current level.  Level can only increase.
+                let expanded = expand(args, self)?;
+                let s = expanded.trim().to_ascii_lowercase();
+                if s.is_empty() {
+                    let level_name = match self.restriction {
+                        RestrictionLevel::None  => "none",
+                        RestrictionLevel::Shell => "shell",
+                        RestrictionLevel::File  => "file",
+                        RestrictionLevel::World => "world",
+                    };
+                    self.output.push(format!("% restriction level: {level_name}"));
+                } else {
+                    let new_level = match s.as_str() {
+                        "none"  => RestrictionLevel::None,
+                        "shell" => RestrictionLevel::Shell,
+                        "file"  => RestrictionLevel::File,
+                        "world" => RestrictionLevel::World,
+                        _ => {
+                            self.output.push(format!("% /restrict: invalid level {s:?}"));
+                            return Ok(None);
+                        }
+                    };
+                    if new_level < self.restriction {
+                        self.output.push("% Restriction level can not be lowered.".to_owned());
+                    } else {
+                        self.restriction = new_level;
+                    }
+                }
+                Ok(None)
+            }
+
+            "suspend" => {
+                self.actions.push(ScriptAction::Suspend);
+                Ok(None)
+            }
+
+            "option102" => {
+                // /option102 [-w world] data
+                // Sends IAC SB 102 <data> IAC SE to the specified (or active) world.
+                let expanded = expand(args, self)?;
+                let mut rest = expanded.trim();
+                let mut world: Option<String> = None;
+                if let Some(r) = rest.strip_prefix("-w") {
+                    let r = r.trim_start();
+                    let (w, tail) = r.split_once(char::is_whitespace).unwrap_or((r, ""));
+                    world = Some(w.to_owned());
+                    rest = tail.trim_start();
+                }
+                self.actions.push(ScriptAction::Option102 {
+                    data: rest.as_bytes().to_vec(),
+                    world,
+                });
                 Ok(None)
             }
 
@@ -2341,6 +2453,107 @@ mod tests {
         assert!(matches!(
             &actions[0],
             ScriptAction::QuoteShellSync { command, .. } if command == "echo hi"
+        ));
+    }
+
+    // ── /restrict tests ─────────────────────────────────────────────────────
+
+    #[test]
+    fn restrict_prints_level_when_no_args() {
+        let mut interp = Interpreter::new();
+        interp.exec_script("/restrict").unwrap();
+        assert!(interp.output[0].contains("none"));
+    }
+
+    #[test]
+    fn restrict_raises_level() {
+        let mut interp = Interpreter::new();
+        interp.exec_script("/restrict shell").unwrap();
+        assert_eq!(interp.restriction, RestrictionLevel::Shell);
+        interp.exec_script("/restrict file").unwrap();
+        assert_eq!(interp.restriction, RestrictionLevel::File);
+    }
+
+    #[test]
+    fn restrict_cannot_lower_level() {
+        let mut interp = Interpreter::new();
+        interp.exec_script("/restrict file").unwrap();
+        interp.output.clear();
+        interp.exec_script("/restrict shell").unwrap();
+        assert_eq!(interp.restriction, RestrictionLevel::File);
+        assert!(interp.output[0].contains("can not be lowered"));
+    }
+
+    #[test]
+    fn restrict_shell_blocks_sh_command() {
+        let mut interp = Interpreter::new();
+        interp.exec_script("/restrict shell").unwrap();
+        interp.output.clear();
+        interp.exec_script("/sh echo hello").unwrap();
+        assert!(interp.output[0].contains("restricted"));
+        assert!(interp.actions.is_empty());
+    }
+
+    #[test]
+    fn restrict_shell_blocks_quote_shell() {
+        let mut interp = Interpreter::new();
+        interp.exec_script("/restrict shell").unwrap();
+        interp.exec_script("/quote !echo hello").unwrap();
+        assert!(interp.actions.is_empty());
+    }
+
+    #[test]
+    fn restrict_file_blocks_load() {
+        let mut interp = Interpreter::new();
+        interp.exec_script("/restrict file").unwrap();
+        interp.output.clear();
+        // No file_loader set, but restriction check happens before loader call.
+        interp.exec_script("/load somefile.tf").unwrap();
+        assert!(interp.output[0].contains("restricted"));
+    }
+
+    #[test]
+    fn restrict_file_blocks_log() {
+        let mut interp = Interpreter::new();
+        interp.exec_script("/restrict file").unwrap();
+        interp.output.clear();
+        interp.exec_script("/log /tmp/test.log").unwrap();
+        assert!(interp.output[0].contains("restricted"));
+        assert!(interp.actions.is_empty());
+    }
+
+    // ── /suspend tests ──────────────────────────────────────────────────────
+
+    #[test]
+    fn suspend_queues_action() {
+        let mut interp = Interpreter::new();
+        interp.exec_script("/suspend").unwrap();
+        let actions = interp.take_actions();
+        assert!(matches!(&actions[0], ScriptAction::Suspend));
+    }
+
+    // ── option102 tests ─────────────────────────────────────────────────────
+
+    #[test]
+    fn option102_queues_action() {
+        let mut interp = Interpreter::new();
+        interp.exec_script("/option102 hello").unwrap();
+        let actions = interp.take_actions();
+        assert!(matches!(
+            &actions[0],
+            ScriptAction::Option102 { data, world: None } if data == b"hello"
+        ));
+    }
+
+    #[test]
+    fn option102_with_world_flag() {
+        let mut interp = Interpreter::new();
+        interp.exec_script("/option102 -w myworld hello").unwrap();
+        let actions = interp.take_actions();
+        assert!(matches!(
+            &actions[0],
+            ScriptAction::Option102 { data, world: Some(w) }
+                if data == b"hello" && w == "myworld"
         ));
     }
 }

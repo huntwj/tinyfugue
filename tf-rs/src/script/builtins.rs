@@ -429,6 +429,14 @@ pub fn call_builtin(name: &str, args: Vec<Value>) -> Option<Result<Value, String
                 Value::Int(unsafe { libc::isatty(libc::STDIN_FILENO) } as i64)
             }
 
+            "option102" => {
+                // option102([world,] data) — send IAC SB 102 <data> IAC SE to a world.
+                // The actual send is handled by the exec_builtin path (/option102);
+                // this function-call form just returns 1 (success) without sending,
+                // since builtins cannot queue ScriptActions.
+                Value::Int(1)
+            }
+
             _ => return Ok(None),
         }))
     }

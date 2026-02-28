@@ -6,7 +6,7 @@ This is a gradual, *strangler-fig* rewrite: the C binary continues to work throu
 
 **Port order follows the dependency graph**: leaf modules (no internal deps) first, core event loop last.
 
-**Status: all 15 phases complete. The Rust binary is the primary binary. 438 tests pass, zero clippy warnings.**
+**Status: all 15 phases complete. The Rust binary is the primary binary. 448 tests pass, zero clippy warnings.**
 
 ---
 
@@ -370,17 +370,19 @@ interrupt normal use.
 
 #### P3 — Niche / rarely needed
 
-- **`/restrict level`** — lock down dangerous commands (file I/O, shell, network).
-  Only needed when TF is run in a shared or untrusted environment.
+- ✓ **`/restrict level`** — `RestrictionLevel` enum (None/Shell/File/World) on
+  `Interpreter`; can only be raised; guards `/sh`, `/quote !cmd`, `/load`, `/log`,
+  `/nolog`, `/save`, `/connect`, `/disconnect`.
 
-- **`/suspend`** — send `SIGSTOP` to self; a job-control relic that requires leaving
-  raw mode, raising SIGSTOP, then re-entering raw mode and repainting on SIGCONT.
+- ✓ **`/suspend`** — `ScriptAction::Suspend`; event loop disables raw mode, calls
+  `libc::raise(SIGSTOP)`, then re-enables raw mode and repaints on resume (SIGCONT).
 
-- **`option102([world,] on/off)`** — niche telnet option; only relevant to a handful
-  of specific servers.
+- ✓ **`option102([world,] data)`** — `NetEvent::Opt102` + `Hook::Option102` wired
+  through net.rs → event_loop; `/option102 [-w world] data` sends
+  `IAC SB 102 <data> IAC SE`; function form stubs to 1 in builtins.
 
-- **MCP (MUD Client Protocol)** — complex bidirectional OOB protocol; only a handful
-  of servers still use it.
+- **MCP (MUD Client Protocol)** — not present in the C TF source either; no
+  implementation needed.
 
 #### Architecture / correctness notes
 

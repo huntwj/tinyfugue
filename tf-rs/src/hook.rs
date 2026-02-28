@@ -48,9 +48,11 @@ pub enum Hook {
     SigUsr1     = 29,
     SigUsr2     = 30,
     World       = 31,
-    // Protocol-extension hooks (conditional in C TF via ENABLE_ATCP / ENABLE_GMCP).
+    // Protocol-extension hooks (conditional in C TF via ENABLE_ATCP / ENABLE_GMCP /
+    // ENABLE_OPTION102).
     Atcp        = 32,
     Gmcp        = 33,
+    Option102   = 34,
 }
 
 impl Hook {
@@ -90,10 +92,11 @@ impl Hook {
         Hook::World,
         Hook::Atcp,
         Hook::Gmcp,
+        Hook::Option102,
     ];
 
     /// Total number of hook variants.
-    pub const COUNT: usize = 34;
+    pub const COUNT: usize = 35;
 
     /// The canonical uppercase name used in TF scripts (e.g. `"CONNECT"`).
     pub fn name(self) -> &'static str {
@@ -132,6 +135,7 @@ impl Hook {
             Hook::World       => "WORLD",
             Hook::Atcp        => "ATCP",
             Hook::Gmcp        => "GMCP",
+            Hook::Option102   => "OPTION102",
         }
     }
 }

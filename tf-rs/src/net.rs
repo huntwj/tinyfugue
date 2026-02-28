@@ -48,6 +48,8 @@ pub enum NetEvent {
     Gmcp(String, String),
     /// An ATCP message: `(function, value)`.
     Atcp(String, String),
+    /// An Option-102 subnegotiation payload.
+    Opt102(String),
     /// The server closed the connection.
     Closed,
 }
@@ -202,6 +204,11 @@ impl Protocol {
                 if let Ok(s) = std::str::from_utf8(&data) {
                     let (func, val) = s.split_once(' ').unwrap_or((s, ""));
                     net_events.push(NetEvent::Atcp(func.to_owned(), val.to_owned()));
+                }
+            }
+            opt::OPT102 => {
+                if let Ok(s) = std::str::from_utf8(&data) {
+                    net_events.push(NetEvent::Opt102(s.to_owned()));
                 }
             }
             _ => {} // unknown subneg — ignore
