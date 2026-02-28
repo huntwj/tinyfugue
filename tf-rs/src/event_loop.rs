@@ -375,6 +375,13 @@ impl EventLoop {
         self.worlds.default_world().is_some()
     }
 
+    /// Push a plain text line into the scrollback buffer.
+    ///
+    /// Used by `main.rs` to emit startup banner messages before `run()`.
+    pub fn push_output(&mut self, line: &str) {
+        self.screen.push_line(LogicalLine::plain(line));
+    }
+
     /// Execute a `.tf` script file through the interpreter.
     ///
     /// Output lines are printed immediately; [`ScriptAction`]s that make sense

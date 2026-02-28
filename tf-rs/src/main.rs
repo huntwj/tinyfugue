@@ -74,15 +74,24 @@ async fn main() {
         event_loop.interp.take_actions(); // discard startup actions
     }
 
+    // ── Startup banner (mirrors C TF's oputs() calls in main.c) ─────────────
+    let ver = env!("CARGO_PKG_VERSION");
+    event_loop.push_output(&format!("TinyFugue (tf) version {ver} (Rust rewrite)"));
+    event_loop.push_output(
+        "Copyright (C) 1993-2007 Ken Keys.  \
+         Rust rewrite (C) 2024-2025 project contributors."
+    );
+    event_loop.push_output("Type `/help', `/help topics', or `/help intro' for help.");
+    event_loop.push_output("Type `/quit' to quit tf.");
+    event_loop.push_output("");
+
     // ── Auto-connect ──────────────────────────────────────────────────────────
     if !args.no_connect {
         match args.connect {
             ConnectTarget::Default => {
-                // Only auto-connect if there is a default world to connect to;
-                // otherwise start idle (no "% Unknown world ''" noise).
-                if event_loop.has_default_world() {
-                    event_loop.connect_world_by_name("").await;
-                }
+                // Always attempt (matching C TF behaviour); connect_world_by_name
+                // will display "% Unknown world ''" if no default world is defined.
+                event_loop.connect_world_by_name("").await;
             }
             ConnectTarget::World(name) => {
                 event_loop.connect_world_by_name(&name).await;
