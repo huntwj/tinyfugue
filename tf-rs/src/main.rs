@@ -29,6 +29,10 @@ async fn main() {
 
     let mut event_loop = EventLoop::new();
 
+    // ── Thread CLI flags through to event loop ────────────────────────────────
+    event_loop.no_autologin = args.no_autologin;
+    event_loop.quiet_login  = args.quiet_login;
+
     // ── Set built-in interpreter globals ──────────────────────────────────────
     event_loop
         .interp

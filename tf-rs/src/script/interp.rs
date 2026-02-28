@@ -1991,21 +1991,21 @@ fn parse_def(raw: &str) -> Macro {
             }
             "h" => {
                 let spec = get_val(inline, &mut rest);
+                // Spec format: HOOKNAME[|HOOKNAME2][/hargs-pattern]
+                let (hook_part, hargs_part) = match spec.find('/') {
+                    Some(idx) => (&spec[..idx], Some(&spec[idx + 1..])),
+                    None => (spec.as_str(), None),
+                };
                 let mut hs = HookSet::NONE;
-                for name in spec.split('|') {
+                for name in hook_part.split('|') {
                     if let Ok(h) = name.trim().parse::<Hook>() {
                         hs.insert(h);
                     }
                 }
                 mac.hooks = hs;
-                // Pattern for hook args comes after; if the next token isn't a
-                // flag or `=`, treat it as the hargs pattern.
-                if !rest.is_empty() && !rest.starts_with('-') && !rest.starts_with('=') {
-                    let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
-                    let harg = &rest[..end];
-                    if !harg.contains('=') {
-                        mac.hargs = Pattern::new(harg, MatchMode::Glob).ok();
-                        rest = rest[end..].trim_start();
+                if let Some(pat) = hargs_part {
+                    if !pat.is_empty() {
+                        mac.hargs = Pattern::new(pat, MatchMode::Glob).ok();
                     }
                 }
             }

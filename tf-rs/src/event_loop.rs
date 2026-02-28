@@ -329,6 +329,12 @@ pub struct EventLoop {
     watchdog_world: Option<String>,
     /// Per-world timestamp of the last received line (used by watchdog check).
     last_data_per_world: HashMap<String, Instant>,
+
+    /// `-l` flag: suppress the LOGIN hook on auto-connect (mirrors C TF `CONN_AUTOLOGIN`).
+    pub no_autologin: bool,
+    /// `-q` flag: quiet login — suppress initial server output after auto-connect.
+    /// Sets `%quiet=1` in the interpreter; `numquiet` line-suppression not yet implemented.
+    pub quiet_login: bool,
 }
 
 impl EventLoop {
@@ -367,6 +373,8 @@ impl EventLoop {
             watchdog_interval: None,
             watchdog_world: None,
             last_data_per_world: HashMap::new(),
+            no_autologin: false,
+            quiet_login: false,
         }
     }
 
@@ -1262,6 +1270,11 @@ impl EventLoop {
         }
         let host = w.host.as_deref().unwrap();
         let port: u16 = w.port.as_deref().unwrap_or("23").parse().unwrap_or(23);
+        // Capture credentials before w is consumed by connect().
+        let credentials = match (&w.character, &w.pass) {
+            (Some(ch), Some(pw)) => Some((ch.clone(), pw.clone())),
+            _ => None,
+        };
         let result = if w.flags.ssl {
             self.connect_tls(&w.name, host, port).await
         } else {
@@ -1277,6 +1290,14 @@ impl EventLoop {
                 let world_msg = format!("---- World {world_name} ----");
                 self.screen.push_line(LogicalLine::plain(&world_msg));
                 self.fire_hook(Hook::World, &world_msg).await;
+                // Fire LOGIN hook if autologin is enabled and world has credentials
+                // (mirrors C TF socket.c:2168-2172; controlled by `-l` flag).
+                if !self.no_autologin {
+                    if let Some((character, password)) = credentials {
+                        let login_args = format!("{world_name} {character} {password}");
+                        self.fire_hook(Hook::Login, &login_args).await;
+                    }
+                }
                 self.need_refresh = true;
             }
             Err(e) => {
@@ -1886,5 +1907,70 @@ mod tests {
             el.handle_net_message(msg).await;
         }
         assert!(!el.handles.contains_key("gone"));
+    }
+
+    // ── S3: -l / -q flag tests ───────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn login_hook_fires_with_credentials() {
+        // World with character+pass → LOGIN hook should fire after connect.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let _server = tokio::spawn(async move { listener.accept().await });
+
+        let mut el = EventLoop::new();
+        // Register a macro that records when the LOGIN hook fires.
+        el.interp.exec_script(
+            "/def -hLOGIN log_login = /set _login_fired 1"
+        ).unwrap();
+        for action in el.interp.take_actions() {
+            el.handle_script_action(action).await;
+        }
+
+        // Add a world with credentials and connect.
+        let mut w = crate::world::World::named("testworld");
+        w.host = Some("127.0.0.1".into());
+        w.port = Some(addr.port().to_string());
+        w.character = Some("hero".into());
+        w.pass = Some("secret".into());
+        el.worlds.upsert(w);
+        el.connect_world_by_name("testworld").await;
+
+        // Hook should have set _login_fired.
+        assert_eq!(
+            el.interp.get_global_var("_login_fired"),
+            Some(&crate::script::value::Value::Int(1)),
+            "LOGIN hook should fire when autologin is enabled and world has credentials"
+        );
+    }
+
+    #[tokio::test]
+    async fn login_hook_suppressed_with_no_autologin() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let _server = tokio::spawn(async move { listener.accept().await });
+
+        let mut el = EventLoop::new();
+        el.no_autologin = true; // -l flag
+        el.interp.exec_script(
+            "/def -hLOGIN log_login = /set _login_fired 1"
+        ).unwrap();
+        for action in el.interp.take_actions() {
+            el.handle_script_action(action).await;
+        }
+
+        let mut w = crate::world::World::named("testworld");
+        w.host = Some("127.0.0.1".into());
+        w.port = Some(addr.port().to_string());
+        w.character = Some("hero".into());
+        w.pass = Some("secret".into());
+        el.worlds.upsert(w);
+        el.connect_world_by_name("testworld").await;
+
+        assert_eq!(
+            el.interp.get_global_var("_login_fired"),
+            None,
+            "LOGIN hook must NOT fire when -l (no_autologin) is set"
+        );
     }
 }
