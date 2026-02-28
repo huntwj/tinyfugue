@@ -148,7 +148,7 @@ pub fn parse_argv(argv: &[String]) -> Result<CliArgs, String> {
                     args.libdir = Some(PathBuf::from(dir));
                 }
 
-                c => return Err(format!("unknown option: -{c}")),
+                c => return Err(format!("illegal option -- {c}")),
             }
             j += 1;
         }

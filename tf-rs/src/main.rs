@@ -16,13 +16,25 @@ async fn main() {
     let args = match cli::parse_args() {
         Ok(a) => a,
         Err(e) => {
-            eprintln!("tf: {e}");
-            eprintln!(
-                "Usage: tf [-L<dir>] [-f[<file>]] [-c<cmd>] [-vnlqd] [<world>]"
-            );
-            eprintln!(
-                "       tf [-L<dir>] [-f[<file>]] [-c<cmd>] [-vlqd]  <host> <port>"
-            );
+            eprintln!("\ntf: {e}");
+            eprintln!();
+            eprintln!("Usage: tf [-L<dir>] [-f[<file>]] [-c<cmd>] [-vnlqd] [<world>]");
+            eprintln!("       tf [-L<dir>] [-f[<file>]] [-c<cmd>] [-vlqd]  <host> <port>");
+            eprintln!("Options:");
+            eprintln!("  -L<dir>   use <dir> as library directory (%TFLIBDIR)");
+            eprintln!("  -f        don't load personal config file (.tfrc)");
+            eprintln!("  -f<file>  load <file> instead of config file");
+            eprintln!("  -c<cmd>   execute <cmd> after loading config file");
+            eprintln!("  -n        no automatic first connection");
+            eprintln!("  -l        no automatic login/password");
+            eprintln!("  -q        quiet login");
+            eprintln!("  -v        no automatic visual mode");
+            eprintln!("  -d        debug mode");
+            eprintln!("Arguments:");
+            eprintln!("  <host>    hostname or IP address");
+            eprintln!("  <port>    port number or name");
+            eprintln!("  <world>   connect to <world> defined by addworld()");
+            eprintln!();
             std::process::exit(1);
         }
     };
