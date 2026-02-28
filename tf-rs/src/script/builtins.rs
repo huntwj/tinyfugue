@@ -52,6 +52,17 @@ pub fn call_builtin(name: &str, args: Vec<Value>) -> Option<Result<Value, String
                     std::cmp::Ordering::Greater => 1,
                 })
             }
+            // strcmpattr(s1, s2) — compare ignoring display attrs (same as strcmp
+            // for plain strings; attr escape sequences are stripped first).
+            "strcmpattr" => {
+                let a = strip_attr_escapes(&get_str(&args, 0, name)?);
+                let b = strip_attr_escapes(&get_str(&args, 1, name)?);
+                Value::Int(match a.cmp(&b) {
+                    std::cmp::Ordering::Less => -1,
+                    std::cmp::Ordering::Equal => 0,
+                    std::cmp::Ordering::Greater => 1,
+                })
+            }
             "strncmp" => {
                 let a = get_str(&args, 0, name)?;
                 let b = get_str(&args, 1, name)?;
@@ -429,6 +440,22 @@ pub fn call_builtin(name: &str, args: Vec<Value>) -> Option<Result<Value, String
                 Value::Int(unsafe { libc::isatty(libc::STDIN_FILENO) } as i64)
             }
 
+            "read" => {
+                // read() — read one line from stdin (used in batch/non-interactive scripts).
+                // Returns the line without trailing newline, or empty string on EOF.
+                use std::io::BufRead;
+                let mut line = String::new();
+                match std::io::stdin().lock().read_line(&mut line) {
+                    Ok(0) => Value::Str(String::new()), // EOF
+                    Ok(_) => {
+                        if line.ends_with('\n') { line.pop(); }
+                        if line.ends_with('\r') { line.pop(); }
+                        Value::Str(line)
+                    }
+                    Err(_) => Value::Str(String::new()),
+                }
+            }
+
             "option102" => {
                 // option102([world,] data) — send IAC SB 102 <data> IAC SE to a world.
                 // The actual send is handled by the exec_builtin path (/option102);
@@ -442,6 +469,28 @@ pub fn call_builtin(name: &str, args: Vec<Value>) -> Option<Result<Value, String
     }
 
     inner(name, args).transpose()
+}
+
+// ── Attribute-stripping helper ────────────────────────────────────────────────
+
+/// Strip TF display attribute escape sequences from a string.
+/// TF attrs are encoded as `@{...}` markup in the expression layer.
+/// This strips any `@{...}` blocks, leaving only the plain text.
+fn strip_attr_escapes(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '@' && chars.peek() == Some(&'{') {
+            chars.next(); // consume '{'
+            // Skip until matching '}'
+            for c2 in chars.by_ref() {
+                if c2 == '}' { break; }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 // ── mktime helper ────────────────────────────────────────────────────────────
@@ -1159,5 +1208,22 @@ mod tests {
         // that the function returns 0 or 1 without panicking.
         let v = call("isatty", vec![]);
         assert!(v == Value::Int(0) || v == Value::Int(1));
+    }
+
+    #[test]
+    fn strcmpattr_plain_strings() {
+        // Without attrs, behaves identically to strcmp.
+        assert_eq!(call("strcmpattr", vec!["a".into(), "b".into()]), Value::Int(-1));
+        assert_eq!(call("strcmpattr", vec!["b".into(), "a".into()]), Value::Int(1));
+        assert_eq!(call("strcmpattr", vec!["x".into(), "x".into()]), Value::Int(0));
+    }
+
+    #[test]
+    fn strcmpattr_strips_markup() {
+        // "@{bold}hello@{}" and "hello" compare as equal once markup is stripped.
+        assert_eq!(
+            call("strcmpattr", vec!["@{bold}hello@{}".into(), "hello".into()]),
+            Value::Int(0)
+        );
     }
 }

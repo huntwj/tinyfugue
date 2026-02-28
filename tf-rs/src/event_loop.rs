@@ -612,11 +612,15 @@ impl EventLoop {
         match action {
             ScriptAction::Quit => self.quit = true,
 
-            ScriptAction::SendToWorld { text, world } => {
+            ScriptAction::SendToWorld { text, world, no_newline } => {
                 let name = world.or_else(|| self.active_world.clone());
                 if let Some(n) = name {
                     if let Some(h) = self.handles.get(&n) {
-                        h.send_line(&text).await;
+                        if no_newline {
+                            h.send_raw(text.into_bytes()).await;
+                        } else {
+                            h.send_line(&text).await;
+                        }
                     }
                 }
             }
@@ -655,8 +659,13 @@ impl EventLoop {
 
             ScriptAction::SwitchWorld { name } => {
                 if self.handles.contains_key(&name) {
-                    self.active_world = Some(name);
+                    self.active_world = Some(name.clone());
                     self.update_status();
+                    // Fire WORLD hook and push divider (mirrors C TF world_hook()).
+                    let world_msg = format!("---- World {name} ----");
+                    self.screen.push_line(LogicalLine::plain(&world_msg));
+                    self.fire_hook(Hook::World, &world_msg).await;
+                    self.need_refresh = true;
                 } else {
                     let msg = format!("% No open connection to '{name}'");
                     self.screen.push_line(LogicalLine::plain(&msg));
@@ -984,6 +993,31 @@ impl EventLoop {
                 self.need_refresh = true;
             }
 
+            ScriptAction::EditInput => {
+                // Open the current input buffer in $EDITOR, then re-insert the
+                // result (mirrors C TF's handle_edit_command in command.c).
+                let editor = std::env::var("EDITOR")
+                    .or_else(|_| std::env::var("VISUAL"))
+                    .unwrap_or_else(|_| "vi".to_owned());
+                let current_text = self.input.editor.text();
+                // Write buffer to a temporary file.
+                let tmp_path = std::env::temp_dir().join(format!("tf_edit_{}.txt", std::process::id()));
+                let written = std::fs::write(&tmp_path, &current_text).is_ok();
+                if written {
+                    crossterm::terminal::disable_raw_mode().ok();
+                    let _ = std::process::Command::new(&editor).arg(&tmp_path).status();
+                    crossterm::terminal::enable_raw_mode().ok();
+                    // Read back and re-insert (strip trailing newline).
+                    if let Ok(mut edited) = std::fs::read_to_string(&tmp_path) {
+                        if edited.ends_with('\n') { edited.pop(); }
+                        if edited.ends_with('\r') { edited.pop(); }
+                        self.input.editor.set_text(&edited);
+                    }
+                    let _ = std::fs::remove_file(&tmp_path);
+                }
+                self.need_refresh = true;
+            }
+
             ScriptAction::Recall(n) => {
                 let entries: Vec<String> = self.input.history.iter_oldest_first()
                     .map(|s| s.to_owned())
@@ -1238,6 +1272,11 @@ impl EventLoop {
                 let world_name = w.name.clone();
                 self.update_status();
                 self.fire_hook(Hook::Connect, &world_name).await;
+                // Fire WORLD hook and push the "---- World X ----" divider
+                // (mirrors C TF's world_hook() call in socket.c).
+                let world_msg = format!("---- World {world_name} ----");
+                self.screen.push_line(LogicalLine::plain(&world_msg));
+                self.fire_hook(Hook::World, &world_msg).await;
                 self.need_refresh = true;
             }
             Err(e) => {
@@ -1368,7 +1407,7 @@ impl EventLoop {
     }
 
     /// Async wrapper for fire_hook_sync (for call sites outside action handlers).
-    async fn fire_hook(&mut self, hook: Hook, args: &str) {
+    pub async fn fire_hook(&mut self, hook: Hook, args: &str) {
         self.fire_hook_sync(hook, args);
     }
 

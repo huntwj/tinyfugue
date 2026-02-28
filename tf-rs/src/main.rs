@@ -1,10 +1,18 @@
 use tf::cli::{self, ConfigFile, ConnectTarget};
 use tf::event_loop::EventLoop;
+use tf::hook::Hook;
 use tf::script::builtins::tf_features_string;
 use tf::script::value::Value;
 
 #[tokio::main]
 async fn main() {
+    // ── Early stdout banner (mirrors C TF's puts() calls before arg parsing) ─
+    // These appear before the TF UI starts, even when stdout is redirected.
+    let ver = env!("CARGO_PKG_VERSION");
+    println!();
+    println!("TinyFugue (tf) version {ver} (Rust rewrite)");
+    println!("Copyright (C) 1993-2007 Ken Keys.  Rust rewrite (C) 2024-2025 contributors.");
+
     let args = match cli::parse_args() {
         Ok(a) => a,
         Err(e) => {
@@ -40,6 +48,22 @@ async fn main() {
         .interp
         .set_global_var("TFLIBRARY", Value::Str(tflibrary.display().to_string()));
 
+    // ── Set variable defaults (mirrors C TF's init_variables / varlist.h) ────
+    // These are read by stdlib.tf and user scripts; set sensible defaults so
+    // they exist even if the user never assigns them.
+    for (name, val) in [
+        ("quiet",  Value::Int(if args.quiet_login { 1 } else { 0 })),
+        ("gag",    Value::Int(0)),
+        ("hilite", Value::Int(1)),
+        ("scroll", Value::Int(1)),
+        ("wrap",   Value::Int(1)),
+        ("login",  Value::Int(1)),
+        ("sub",    Value::Str("both".to_owned())),
+        ("more",   Value::Int(1)),
+    ] {
+        event_loop.interp.set_global_var(name, val);
+    }
+
     // ── Load stdlib.tf (required — fatal if missing) ──────────────────────────
     if let Err(e) = event_loop.load_script_file(&tflibrary) {
         eprintln!("tf: Can't read required library: {e}");
@@ -62,6 +86,23 @@ async fn main() {
             }
         }
     }
+
+    // ── Set %visual and %interactive (mirrors C TF main.c:201-207) ──────────
+    // C sets these after config loading, only if not explicitly set (< 0).
+    // We always set them here; a user config loaded above may have overridden
+    // them by the time we reach this point, but stdlib.tf reads them on connect
+    // so they must be present with sensible defaults.
+    let is_tty = unsafe {
+        libc::isatty(libc::STDIN_FILENO) != 0 && libc::isatty(libc::STDOUT_FILENO) != 0
+    };
+    event_loop.interp.set_global_var(
+        "interactive",
+        Value::Int(if is_tty { 1 } else { 0 }),
+    );
+    event_loop.interp.set_global_var(
+        "visual",
+        Value::Int(if is_tty && !args.no_visual { 1 } else { 0 }),
+    );
 
     // ── Execute startup command (-c<cmd>) ─────────────────────────────────────
     if let Some(cmd) = args.command {
@@ -103,6 +144,11 @@ async fn main() {
                 }
             }
         }
+    } else {
+        // -n flag: no automatic connection (mirrors C TF main.c:221-222).
+        let msg = "---- No world ----";
+        event_loop.push_output(msg);
+        event_loop.fire_hook(Hook::World, msg).await;
     }
 
     // ── Enter main loop ───────────────────────────────────────────────────────

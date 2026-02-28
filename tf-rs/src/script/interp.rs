@@ -29,7 +29,7 @@ use super::{
 #[derive(Debug, Clone)]
 pub enum ScriptAction {
     /// Send text to a world (`None` = active world).
-    SendToWorld { text: String, world: Option<String> },
+    SendToWorld { text: String, world: Option<String>, no_newline: bool },
     /// Open a connection to a named world (or the default world if empty).
     Connect { name: String },
     /// Close a connection.
@@ -138,6 +138,8 @@ pub enum ScriptAction {
 
     /// Suspend the process (leave raw mode, SIGSTOP, resume, repaint) (`/suspend`).
     Suspend,
+    /// Open the current input buffer in `$EDITOR`, then re-insert the result (`/edit`).
+    EditInput,
     /// Send an option-102 subnegotiation to a world (`option102([world,] data)`).
     Option102 { data: Vec<u8>, world: Option<String> },
 
@@ -343,6 +345,7 @@ impl Interpreter {
                 self.actions.push(ScriptAction::SendToWorld {
                     text: expanded,
                     world: None,
+                    no_newline: false,
                 });
                 Ok(None)
             }
@@ -964,10 +967,20 @@ impl Interpreter {
 
             "version" => {
                 self.output.push(format!(
-                    "% TinyFugue (Rust) version {}",
+                    "% TinyFugue (tf) version {} (Rust rewrite).",
                     env!("CARGO_PKG_VERSION"),
                 ));
-                self.output.push("% Copyright (C) 1993-2007 Ken Keys".to_owned());
+                self.output.push(
+                    "% Copyright (C) 1993-2007 Ken Keys.  \
+                     Rust rewrite (C) 2024-2025 contributors."
+                    .to_owned(),
+                );
+                self.output
+                    .push("% Rust rewrite of TinyFugue.".to_owned());
+                self.output.push(format!(
+                    "% Built for {}.",
+                    std::env::consts::OS,
+                ));
                 Ok(None)
             }
 
@@ -1156,6 +1169,81 @@ impl Interpreter {
 
             "suspend" => {
                 self.actions.push(ScriptAction::Suspend);
+                Ok(None)
+            }
+
+            // [C5] /edit — open current input buffer in $EDITOR, re-insert on exit.
+            "edit" => {
+                self.actions.push(ScriptAction::EditInput);
+                Ok(None)
+            }
+
+            // [C1] /gag [pattern] — set global gag or create a gag trigger.
+            "gag" => {
+                let expanded = expand(args, self)?;
+                let s = expanded.trim();
+                if s.is_empty() {
+                    // No args: enable global gag.
+                    self.set_global("gag", Value::Int(1));
+                } else {
+                    // With pattern: shorthand for /def -ag <pattern>.
+                    let body = format!("/def -ag {s}");
+                    if let Ok(stmts) = parse_script(&body) {
+                        self.exec_block(&stmts)?;
+                    }
+                }
+                Ok(None)
+            }
+
+            // [C2] /hilite [pattern] — set global hilite or create a hilite trigger.
+            "hilite" => {
+                let expanded = expand(args, self)?;
+                let s = expanded.trim();
+                if s.is_empty() {
+                    // No args: enable global hilite.
+                    self.set_global("hilite", Value::Int(1));
+                } else {
+                    // With pattern: shorthand for /def -ah <pattern>.
+                    let body = format!("/def -ah {s}");
+                    if let Ok(stmts) = parse_script(&body) {
+                        self.exec_block(&stmts)?;
+                    }
+                }
+                Ok(None)
+            }
+
+            // [C3] /relimit — re-enable output limiting after it was hit.
+            // [C3] /unlimit — remove the output limit entirely.
+            // Both are stubs; real paged-output tracking not yet implemented.
+            "relimit" => {
+                self.set_global("more", Value::Int(1));
+                Ok(None)
+            }
+            "unlimit" => {
+                self.set_global("more", Value::Int(0));
+                Ok(None)
+            }
+
+            // [C4] /core — dump debug state (stub).
+            "core" => {
+                self.output.push("% /core: debug dump not implemented in Rust build.".to_owned());
+                Ok(None)
+            }
+
+            // [C6] /liststreams — list open tfopen file descriptors.
+            "liststreams" => {
+                if self.tf_files.is_empty() {
+                    self.output.push("% No open streams.".to_owned());
+                } else {
+                    for (fd, f) in &self.tf_files {
+                        let kind = match f {
+                            TfFile::Reader(_)   => "r",
+                            TfFile::Writer(_)   => "w",
+                            TfFile::Appender(_) => "a",
+                        };
+                        self.output.push(format!("% stream {fd}: mode={kind}"));
+                    }
+                }
                 Ok(None)
             }
 
@@ -1606,6 +1694,40 @@ impl EvalContext for Interpreter {
                 return Ok(Value::Int(pos));
             }
 
+            // kbwordleft([n]) / kbwordright([n]) — cursor position n words left/right.
+            // These return the new cursor position; they do NOT move the cursor.
+            // Typically bound to M-b / M-f and wired to kbgoto() in user macros.
+            "kbwordleft" => {
+                let n = args.first().map(|v| v.as_int()).unwrap_or(1).max(0) as usize;
+                let head = self.globals.get("kbhead").map(|v| v.to_string()).unwrap_or_default();
+                let cursor = head.chars().count();
+                let head_chars: Vec<char> = head.chars().collect();
+                let mut pos = cursor;
+                for _ in 0..n {
+                    // Skip whitespace to the left, then skip non-whitespace.
+                    while pos > 0 && head_chars[pos - 1].is_whitespace() { pos -= 1; }
+                    while pos > 0 && !head_chars[pos - 1].is_whitespace() { pos -= 1; }
+                }
+                return Ok(Value::Int(pos as i64));
+            }
+            "kbwordright" => {
+                let n = args.first().map(|v| v.as_int()).unwrap_or(1).max(0) as usize;
+                let head = self.globals.get("kbhead").map(|v| v.to_string()).unwrap_or_default();
+                let tail = self.globals.get("kbtail").map(|v| v.to_string()).unwrap_or_default();
+                let cursor = head.chars().count();
+                let buf = format!("{head}{tail}");
+                let buf_chars: Vec<char> = buf.chars().collect();
+                let total = buf_chars.len();
+                let mut pos = cursor;
+                for _ in 0..n {
+                    // Skip leading whitespace, then skip non-whitespace (Emacs M-f
+                    // style: cursor lands at end of next word, before trailing space).
+                    while pos < total && buf_chars[pos].is_whitespace() { pos += 1; }
+                    while pos < total && !buf_chars[pos].is_whitespace() { pos += 1; }
+                }
+                return Ok(Value::Int(pos as i64));
+            }
+
             // ── Pager control ─────────────────────────────────────────────────
             "morepaused" => {
                 return Ok(self.globals.get("_morepaused").cloned().unwrap_or(Value::Int(0)));
@@ -1630,6 +1752,22 @@ impl EvalContext for Interpreter {
             }
 
             // ── Server injection ───────────────────────────────────────────────
+            // send(text[, world[, flags]])
+            // Flags: "u" = no trailing newline (unflushed/raw); "h" = fire SEND hook.
+            // This is the primary way scripts send text to a MUD (stdlib.tf:113).
+            "send" => {
+                let text = args.first().map(|v| v.to_string()).unwrap_or_default();
+                let world = if args.len() >= 2 && !args[1].to_string().is_empty() {
+                    Some(args[1].to_string())
+                } else {
+                    None
+                };
+                let flags = args.get(2).map(|v| v.to_string()).unwrap_or_default();
+                let no_newline = flags.contains('u');
+                self.actions.push(ScriptAction::SendToWorld { text, world, no_newline });
+                return Ok(Value::Int(1));
+            }
+
             "fake_recv" => {
                 // fake_recv([world,] line) — inject a line as if from the server.
                 // If two args are given, first is the world name.
@@ -2196,7 +2334,7 @@ mod tests {
         let actions = interp.take_actions();
         assert!(matches!(
             &actions[0],
-            ScriptAction::SendToWorld { text, world: None } if text == "go east"
+            ScriptAction::SendToWorld { text, world: None, no_newline: false } if text == "go east"
         ));
     }
 
@@ -2555,5 +2693,108 @@ mod tests {
             ScriptAction::Option102 { data, world: Some(w) }
                 if data == b"hello" && w == "myworld"
         ));
+    }
+
+    // ── send() function tests ────────────────────────────────────────────────
+
+    #[test]
+    fn send_fn_queues_action() {
+        let mut interp = Interpreter::new();
+        // /test evaluates an expression; send() should queue SendToWorld.
+        interp.exec_script("/test send(\"go west\")").unwrap();
+        let actions = interp.take_actions();
+        assert!(matches!(
+            &actions[0],
+            ScriptAction::SendToWorld { text, world: None, no_newline: false }
+                if text == "go west"
+        ));
+    }
+
+    #[test]
+    fn send_fn_with_world_arg() {
+        let mut interp = Interpreter::new();
+        interp.exec_script("/test send(\"hi\", \"myworld\")").unwrap();
+        let actions = interp.take_actions();
+        assert!(matches!(
+            &actions[0],
+            ScriptAction::SendToWorld { text, world: Some(w), no_newline: false }
+                if text == "hi" && w == "myworld"
+        ));
+    }
+
+    #[test]
+    fn send_fn_unflushed_flag() {
+        let mut interp = Interpreter::new();
+        interp.exec_script("/test send(\"raw\", \"\", \"u\")").unwrap();
+        let actions = interp.take_actions();
+        assert!(matches!(
+            &actions[0],
+            ScriptAction::SendToWorld { text, world: None, no_newline: true }
+                if text == "raw"
+        ));
+    }
+
+    // ── kbwordleft / kbwordright tests ───────────────────────────────────────
+
+    #[test]
+    fn kbwordleft_basic() {
+        let mut interp = Interpreter::new();
+        // kbhead = "hello world", cursor is at end (position 11).
+        interp.set_global_var("kbhead", Value::Str("hello world".to_owned()));
+        interp.set_global_var("kbtail", Value::Str(String::new()));
+        // One word left from "hello world|" should land at position 6 (start of "world").
+        let result = interp.call_fn("kbwordleft", vec![Value::Int(1)]).unwrap();
+        assert_eq!(result, Value::Int(6));
+    }
+
+    #[test]
+    fn kbwordright_basic() {
+        let mut interp = Interpreter::new();
+        // kbhead = "hello ", kbtail = "world here".
+        interp.set_global_var("kbhead", Value::Str("hello ".to_owned()));
+        interp.set_global_var("kbtail", Value::Str("world here".to_owned()));
+        // One word right from position 6 should reach position 11 (after "world").
+        let result = interp.call_fn("kbwordright", vec![Value::Int(1)]).unwrap();
+        assert_eq!(result, Value::Int(11));
+    }
+
+    // ── /gag, /hilite, /relimit, /unlimit, /core, /edit tests ───────────────
+
+    #[test]
+    fn gag_no_args_sets_global() {
+        let mut interp = Interpreter::new();
+        interp.exec_script("/gag").unwrap();
+        assert_eq!(interp.get_global_var("gag"), Some(&Value::Int(1)));
+    }
+
+    #[test]
+    fn hilite_no_args_sets_global() {
+        let mut interp = Interpreter::new();
+        interp.exec_script("/hilite").unwrap();
+        assert_eq!(interp.get_global_var("hilite"), Some(&Value::Int(1)));
+    }
+
+    #[test]
+    fn relimit_sets_more() {
+        let mut interp = Interpreter::new();
+        interp.exec_script("/unlimit").unwrap();
+        assert_eq!(interp.get_global_var("more"), Some(&Value::Int(0)));
+        interp.exec_script("/relimit").unwrap();
+        assert_eq!(interp.get_global_var("more"), Some(&Value::Int(1)));
+    }
+
+    #[test]
+    fn core_outputs_message() {
+        let mut interp = Interpreter::new();
+        interp.exec_script("/core").unwrap();
+        assert!(!interp.output.is_empty());
+    }
+
+    #[test]
+    fn edit_queues_action() {
+        let mut interp = Interpreter::new();
+        interp.exec_script("/edit").unwrap();
+        let actions = interp.take_actions();
+        assert!(matches!(&actions[0], ScriptAction::EditInput));
     }
 }
