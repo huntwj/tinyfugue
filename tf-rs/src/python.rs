@@ -116,9 +116,11 @@ mod python_impl {
     #[pyfunction]
     #[pyo3(name = "world")]
     fn pytf_world() -> String {
-        let guard = STATE.lock().unwrap();
-        guard
-            .as_ref()
+        // Clone the Arc out before releasing the STATE lock to avoid holding
+        // two locks simultaneously (STATE + active_world), which would risk a
+        // deadlock if another code path acquires them in the opposite order.
+        let state_arc = STATE.lock().unwrap().clone();
+        state_arc
             .and_then(|s| s.active_world.lock().unwrap().clone())
             .unwrap_or_default()
     }

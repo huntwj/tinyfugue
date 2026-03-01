@@ -137,7 +137,7 @@ rather than silently continuing.
 
 ### H8 — Potential deadlock in `python.rs`
 **File:** `python.rs` (`pytf_world` ~line 121)
-**Status:** [ ]
+**Status:** [x]
 
 `pytf_world` holds the `STATE: Mutex<...>` lock while calling `.lock()` on
 `active_world: Mutex<...>`. If any other code path acquires `active_world` first and
