@@ -4,7 +4,7 @@ use tf::hook::Hook;
 use tf::script::builtins::tf_features_string;
 use tf::script::value::Value;
 
-#[tokio::main]
+#[tokio::main(flavor = "current_thread")]
 async fn main() {
     // ── Early stdout banner (mirrors C TF's puts() calls before arg parsing) ─
     // These appear before the TF UI starts, even when stdout is redirected.

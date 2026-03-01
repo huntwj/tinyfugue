@@ -60,7 +60,7 @@ let Some(host) = w.host.as_deref() else {
 
 ### H4 — `set_var` undefined behaviour in multi-threaded runtime
 **File:** `script/interp.rs` (`/setenv` and `/export` handlers)
-**Status:** [ ]
+**Status:** [x]
 
 `unsafe { std::env::set_var(...) }` is called on the tokio runtime thread. With the
 default `#[tokio::main]` multi-threaded runtime, other worker threads may concurrently
