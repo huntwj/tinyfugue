@@ -413,9 +413,10 @@ impl EventLoop {
     /// Execute a TF script given its source directly (e.g. from embedded files).
     pub fn load_script_source(&mut self, src: &str, label: &str) -> Result<(), String> {
         println!("% Loading commands from {label}.");
-        self.interp
-            .exec_script(src)
-            .map_err(|e| format!("{label}: {e}"))?;
+        self.interp.file_load_mode = true;
+        let r = self.interp.exec_script(src);
+        self.interp.file_load_mode = false;
+        r.map_err(|e| format!("{label}: {e}"))?;
         // Drain output — print to stdout (terminal not in raw mode yet).
         for line in self.interp.output.drain(..) {
             println!("{line}");

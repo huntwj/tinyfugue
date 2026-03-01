@@ -410,15 +410,24 @@ fn split_word(s: &str) -> Option<(&str, &str)> {
 
 /// Parse `/let name=value` or `/set name=value` or `/set name value`.
 fn parse_let_or_set(rest: &str, is_let: bool) -> Stmt {
-    let (name, value) = if let Some(eq) = rest.find('=') {
-        (rest[..eq].trim().to_owned(), rest[eq + 1..].to_owned())
+    // Read the variable name: alphanumeric + underscore only (matches C TF's spanvar).
+    // This prevents splitting on '=' that appears inside the value (e.g. "=~" in expressions).
+    let name_end = rest
+        .find(|c: char| !c.is_alphanumeric() && c != '_')
+        .unwrap_or(rest.len());
+    let name = rest[..name_end].to_owned();
+    let after_name = &rest[name_end..];
+
+    // C TF's setdelim logic:
+    //   starts with '='  → value is everything after '='
+    //   starts with space → skip whitespace; rest is the value
+    //   empty             → no value (display/unset behaviour)
+    let value = if let Some(after_eq) = after_name.strip_prefix('=') {
+        after_eq.to_owned()
     } else {
-        // `/set name value`
-        let mut parts = rest.splitn(2, char::is_whitespace);
-        let name = parts.next().unwrap_or("").trim().to_owned();
-        let value = parts.next().unwrap_or("").trim().to_owned();
-        (name, value)
+        after_name.trim_start().to_owned()
     };
+
     if is_let {
         Stmt::Let { name, value }
     } else {

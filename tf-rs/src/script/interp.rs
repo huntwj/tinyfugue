@@ -273,6 +273,11 @@ pub struct Interpreter {
     pub macro_names: HashSet<String>,
     /// Current restriction level (set by `/restrict`; can only increase).
     pub restriction: RestrictionLevel,
+    /// When `true`, `/set` and `/let` at the top level (no macro frame) do NOT
+    /// expand `%name` variables — mirrors C TF's `SUB_KEYWORD` file-load mode.
+    /// Set by the `/load` handler and `load_script_source` for the duration of
+    /// file loading; `false` in interactive/test mode so expansion works normally.
+    pub file_load_mode: bool,
 }
 
 impl Default for Interpreter {
@@ -295,6 +300,7 @@ impl Interpreter {
             worlds_snapshot: HashMap::new(),
             macro_names: HashSet::new(),
             restriction: RestrictionLevel::None,
+            file_load_mode: false,
         }
     }
 
@@ -377,14 +383,27 @@ impl Interpreter {
             }
 
             Stmt::Set { name, value } => {
-                let expanded = expand(value, self)?;
+                // In C TF, /set values at file-load level (SUB_KEYWORD) are stored
+                // literally — %H in "%H:%M" is NOT expanded to the (undefined) variable H.
+                // We replicate this: skip expansion when loading a file AND not inside a
+                // macro frame (top-level file statement).  Inside a macro body (frames
+                // non-empty) full expansion applies regardless of file_load_mode.
+                let expanded = if self.file_load_mode && self.frames.is_empty() {
+                    value.clone()
+                } else {
+                    expand(value, self)?
+                };
                 let val = try_parse_number(&expanded);
                 self.set_global(name, val);
                 Ok(None)
             }
 
             Stmt::Let { name, value } => {
-                let expanded = expand(value, self)?;
+                let expanded = if self.file_load_mode && self.frames.is_empty() {
+                    value.clone()
+                } else {
+                    expand(value, self)?
+                };
                 let val = try_parse_number(&expanded);
                 self.set_local(name, val);
                 Ok(None)
@@ -582,7 +601,11 @@ impl Interpreter {
                                 }
                                 let stmts = parse_script(&src)
                                     .map_err(|e| format!("{path}: parse error: {e}"))?;
-                                self.exec_block(&stmts)?;
+                                let old_flm = self.file_load_mode;
+                                self.file_load_mode = true;
+                                let r = self.exec_block(&stmts);
+                                self.file_load_mode = old_flm;
+                                r?;
                                 loaded = true;
                                 break;
                             }
@@ -2398,7 +2421,7 @@ mod tests {
         let mut interp = Interpreter::new();
         interp.file_loader = Some(body);
         interp.exec_script("/load somefile.tf").unwrap();
-        assert_eq!(interp.output, vec!["loaded"]);
+        assert_eq!(interp.output, vec!["% Loading commands from somefile.tf.", "loaded"]);
     }
 
     #[test]
