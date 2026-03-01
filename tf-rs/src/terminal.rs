@@ -347,7 +347,10 @@ impl Terminal {
         for (i, sl) in lines.iter().enumerate().take(self.status_height as usize) {
             let row = top + i as u16;
             let text = pad_or_truncate(&sl.text, width, '_');
-            let style = attr_style(sl.attr | Attr::REVERSE); // default: reversed
+            // Apply only the attr stored in the StatusLine (set by %status_attr).
+            // C TF defaults status_attr to empty — no reverse — so the '_'
+            // fill characters provide the visual separation from the output area.
+            let style = attr_style(sl.attr);
             queue!(
                 self.out,
                 cursor::MoveTo(0, row),
@@ -360,14 +363,11 @@ impl Terminal {
         // Clear any unused status rows.
         for i in lines.len()..self.status_height as usize {
             let row = top + i as u16;
-            let blank = " ".repeat(width);
-            let style = attr_style(Attr::REVERSE);
+            let blank = "_".repeat(width);
             queue!(
                 self.out,
                 cursor::MoveTo(0, row),
-                SetStyle(style),
-                Print(&blank),
-                ResetColor
+                Print(&blank)
             )?;
         }
 

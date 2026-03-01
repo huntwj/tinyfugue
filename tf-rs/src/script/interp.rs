@@ -577,6 +577,9 @@ impl Interpreter {
                     for path in &paths {
                         match loader(path) {
                             Ok(src) => {
+                                if !quiet {
+                                    self.output.push(format!("% Loading commands from {path}."));
+                                }
                                 let stmts = parse_script(&src)
                                     .map_err(|e| format!("{path}: parse error: {e}"))?;
                                 self.exec_block(&stmts)?;
