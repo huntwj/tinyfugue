@@ -79,7 +79,7 @@ concerns around `set_var` and other non-`Send` state.
 
 ### H5 — `=/` operator is a stub (performs substring search, not regex)
 **File:** `script/expr.rs` (`regex_match` function)
-**Status:** [ ]
+**Status:** [x]
 
 ```rust
 fn regex_match(text: &str, pattern: &str) -> bool {

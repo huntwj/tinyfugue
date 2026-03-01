@@ -8,6 +8,7 @@
 //!   comma  →  assign  →  ternary  →  or  →  and  →  relational  →
 //!   additive  →  multiplicative  →  unary  →  postfix  →  primary
 
+use crate::pattern::{MatchMode, Pattern};
 use super::value::Value;
 
 // ── EvalContext ───────────────────────────────────────────────────────────────
@@ -862,9 +863,9 @@ fn glob_match_inner(p: &[char], t: &[char]) -> bool {
 }
 
 fn regex_match(pattern: &str, text: &str) -> bool {
-    // Minimal fallback: exact substring match.
-    // A full implementation would use the `regex` crate or our pattern module.
-    text.contains(pattern)
+    Pattern::new(pattern, MatchMode::Regexp)
+        .map(|p| p.matches(text))
+        .unwrap_or(false)
 }
 
 /// Convenience: parse and evaluate a TF expression string.
@@ -1016,9 +1017,12 @@ mod tests {
 
     #[test]
     fn not_regex_match_op() {
-        // regex_match uses substring match as a fallback.
         assert_eq!(eval("\"hello world\" !/ \"world\""), Value::Int(0));
         assert_eq!(eval("\"hello\" !/ \"xyz\""), Value::Int(1));
+        // Real regex matching — dot matches any char
+        assert_eq!(eval("\"hello\" =/ \"hel.o\""), Value::Int(1));
+        assert_eq!(eval("\"hello\" =/ \"^hell$\""), Value::Int(0)); // anchored, no full match
+        assert_eq!(eval("\"hello\" =/ \"^hello$\""), Value::Int(1));
     }
 
     #[test]
