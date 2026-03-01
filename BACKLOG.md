@@ -284,3 +284,30 @@ Most can be stubbed as reasonable defaults.
   `"world character password"` when `!no_autologin` and world has credentials; `no_autologin`
   and `quiet_login` fields on `EventLoop` threaded from CLI args; `parse_def` hargs bug fixed
   (was consuming macro name as hargs pattern — now parsed from `/pattern` suffix in spec only)
+
+---
+
+## Performance
+
+### [P1] Investigate scripting performance: tree-walking vs bytecode VM
+
+The C TF interpreter (`expr.c`) compiles macro bodies into a bytecode
+representation and runs them via a simple VM.  The Rust rewrite
+(`tf-rs/src/script/`) uses a tree-walking interpreter over an in-memory AST.
+
+Tree-walking is simpler to implement but may be considerably slower for
+macros that are invoked frequently (triggers, hooks, aliases) or that have
+complex bodies with loops and conditionals.
+
+**Investigation tasks:**
+
+1. Profile real workloads (e.g. a trigger-heavy mudding session) to quantify
+   the gap — it may be negligible given I/O dominates most MUD traffic.
+2. If the gap is significant, consider:
+   - Compiling the AST to a simple bytecode (stack machine) before first
+     execution and caching the bytecode on the `Macro` struct.
+   - Alternatively, evaluate whether an existing Rust bytecode VM crate
+     (e.g. `piccolo`, `luster`) is suitable.
+3. Compare `parse_def` re-parse overhead: currently each `/def` re-parses
+   the body on every invocation (H9 in CODE_REVIEW.md); caching the AST is
+   a prerequisite for bytecode compilation.
