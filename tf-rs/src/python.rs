@@ -251,6 +251,13 @@ sys.argv = ['tf']
         }
 
         /// Execute a Python source file in the `__main__` namespace.
+        ///
+        /// # Blocking I/O
+        ///
+        /// This function uses `std::fs::read_to_string` and **must not** be called
+        /// from an async context (e.g. the tokio event loop).  Async callers should
+        /// read the file with `tokio::fs::read_to_string(path).await` and then call
+        /// [`Self::exec`] with the resulting string.
         pub fn run_file(&self, path: &Path) -> PyResult<()> {
             let code = std::fs::read_to_string(path).map_err(|e| {
                 PyErr::new::<pyo3::exceptions::PyOSError, _>(e.to_string())

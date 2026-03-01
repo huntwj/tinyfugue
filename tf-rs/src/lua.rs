@@ -206,6 +206,13 @@ mod lua_impl {
         // ── File loading ──────────────────────────────────────────────────
 
         /// Load and execute a Lua source file (mirrors `/loadlua path`).
+        ///
+        /// # Blocking I/O
+        ///
+        /// `mlua::Lua::load(path)` reads the file synchronously and **must not** be
+        /// called from an async context.  Async callers should read the file with
+        /// `tokio::fs::read_to_string(path).await` and pass the resulting string to
+        /// `lua.load(&code).exec()` instead.
         pub fn load_file(&self, path: &Path) -> LuaResult<()> {
             self.lua.load(path).exec()
         }
