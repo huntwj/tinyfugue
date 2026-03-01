@@ -182,7 +182,7 @@ lost.
 
 ### M1 — Glob worst-case exponential complexity
 **File:** `script/expr.rs` and `pattern.rs` (`glob_match_inner`)
-**Status:** [ ]
+**Status:** [x]
 
 The `*` wildcard case recurses on every suffix — O(2ⁿ) for pathological patterns like
 `*a*a*a*b`. Low real-world risk but a malformed trigger body could hang TF.

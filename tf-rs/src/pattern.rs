@@ -286,18 +286,35 @@ fn has_unescaped_upper(pattern: &str) -> bool {
 //   \x       — literal x
 //   All matching is case-insensitive.
 
+/// Maximum recursion depth for the glob matcher.
+///
+/// The `*` wildcard in `smatch` causes one recursive call per character
+/// position in the remaining text, and each recursive call can itself
+/// encounter another `*`.  A pathological pattern like `*a*a*a*b` with a
+/// long text of `a`s can thus produce O(2ⁿ) calls.
+///
+/// This limit caps the recursion; when exceeded the match returns `false`
+/// (conservative: the pattern might have matched, but a hang is worse).
+/// 256 levels allows patterns with up to ~16 `*` wildcards against typical
+/// MUD lines (< 512 chars) without false negatives in practice.
+const SMATCH_MAX_DEPTH: usize = 256;
+
 /// Public entry point for glob matching.
 pub fn glob_match(pat: &str, text: &str) -> bool {
     let p = pat.as_bytes();
     let s = text.as_bytes();
-    smatch(p, s, s, false)
+    smatch(p, s, s, false, SMATCH_MAX_DEPTH)
 }
 
 /// Recursive glob matcher.  Returns `true` on match.
 ///
 /// `start` is the original beginning of the subject string (never advanced),
 /// used to detect word boundaries.  `inword` is `true` inside `{...}`.
-fn smatch(mut pat: &[u8], mut s: &[u8], start: &[u8], inword: bool) -> bool {
+/// `depth` is the remaining recursion budget; returns `false` when exhausted.
+fn smatch(mut pat: &[u8], mut s: &[u8], start: &[u8], inword: bool, depth: usize) -> bool {
+    if depth == 0 {
+        return false; // recursion limit reached — treat as no-match
+    }
     loop {
         let p = match pat.first().copied() {
             None => {
@@ -354,23 +371,23 @@ fn smatch(mut pat: &[u8], mut s: &[u8], start: &[u8], inword: bool) -> bool {
                     // `*` inside `{…}`: match up to but not including space.
                     let mut pos = s;
                     while !pos.is_empty() && pos[0] != b' ' {
-                        if smatch(pat, pos, start, inword) {
+                        if smatch(pat, pos, start, inword, depth - 1) {
                             return true;
                         }
                         pos = &pos[1..];
                     }
-                    return smatch(pat, pos, start, inword);
+                    return smatch(pat, pos, start, inword, depth - 1);
                 } else if pat.is_empty() {
                     return true;
                 } else if pat[0] == b'{' {
                     // `*` before a word-group: try at every word boundary.
                     let s_off = start.len() - s.len();
-                    if (s_off == 0 || start[s_off - 1] == b' ') && smatch(pat, s, start, inword) {
+                    if (s_off == 0 || start[s_off - 1] == b' ') && smatch(pat, s, start, inword, depth - 1) {
                         return true;
                     }
                     let mut pos = s;
                     while !pos.is_empty() {
-                        if pos[0] == b' ' && smatch(pat, &pos[1..], start, inword) {
+                        if pos[0] == b' ' && smatch(pat, &pos[1..], start, inword, depth - 1) {
                             return true;
                         }
                         pos = &pos[1..];
@@ -379,7 +396,7 @@ fn smatch(mut pat: &[u8], mut s: &[u8], start: &[u8], inword: bool) -> bool {
                 } else if pat[0] == b'[' {
                     let mut pos = s;
                     while !pos.is_empty() {
-                        if smatch(pat, pos, start, inword) {
+                        if smatch(pat, pos, start, inword, depth - 1) {
                             return true;
                         }
                         pos = &pos[1..];
@@ -396,7 +413,7 @@ fn smatch(mut pat: &[u8], mut s: &[u8], start: &[u8], inword: bool) -> bool {
                     let mut pos = s;
                     while !pos.is_empty() {
                         if pos[0].to_ascii_lowercase() == first_lo
-                            && smatch(pat, pos, start, inword)
+                            && smatch(pat, pos, start, inword, depth - 1)
                         {
                             return true;
                         }
@@ -444,7 +461,7 @@ fn smatch(mut pat: &[u8], mut s: &[u8], start: &[u8], inword: bool) -> bool {
                 loop {
                     let pipe = find_unescaped(alts, b'|').unwrap_or(alts.len());
                     let alt = &alts[..pipe];
-                    if smatch(alt, s, start, true) {
+                    if smatch(alt, s, start, true, depth - 1) {
                         matched = true;
                         break;
                     }
@@ -820,5 +837,16 @@ mod tests {
         // `MatchMode::Simple` is ASCII-only case-insensitive; Unicode
         // case folding is not performed, so upper/lower variants won't match.
         assert!(!p.matches("É"));
+    }
+
+    #[test]
+    fn glob_depth_limit_does_not_hang() {
+        // Pathological pattern "*a*a*a..." against a long non-matching string
+        // would be O(2ⁿ) without the depth limit. The depth limit must return
+        // false quickly rather than hanging.
+        let pattern = "*a".repeat(20);
+        let text = "b".repeat(100);
+        // Must complete essentially instantly; result is false (no match).
+        assert!(!glob_match(&pattern, &text));
     }
 }
