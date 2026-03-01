@@ -244,6 +244,7 @@ fn compile_regex(pattern: &str) -> Result<Regex, PatternError> {
 
 fn has_unescaped_upper(pattern: &str) -> bool {
     let mut escaped = false;
+    let mut in_bracket = false;
     for ch in pattern.chars() {
         if escaped {
             escaped = false;
@@ -251,6 +252,19 @@ fn has_unescaped_upper(pattern: &str) -> bool {
         }
         if ch == '\\' {
             escaped = true;
+            continue;
+        }
+        if in_bracket {
+            if ch == ']' {
+                in_bracket = false;
+            }
+            // Don't treat uppercase inside [...] as "has unescaped upper" —
+            // bracket expressions like [A-Z] are character-class matchers, not
+            // literal uppercase letters that would disable case-insensitivity.
+            continue;
+        }
+        if ch == '[' {
+            in_bracket = true;
             continue;
         }
         if ch.is_uppercase() {
@@ -634,6 +648,17 @@ mod tests {
         let p = Pattern::new("Hello", MatchMode::Regexp).unwrap();
         assert!(p.matches("Hello"));
         assert!(!p.matches("hello"));
+    }
+
+    #[test]
+    fn regex_bracket_class_does_not_disable_case_insensitivity() {
+        // [A-Z] contains uppercase letters but they are inside a bracket class;
+        // the overall pattern should still match case-insensitively outside the class.
+        let p = Pattern::new(r"[a-z]+", MatchMode::Regexp).unwrap();
+        assert!(p.matches("HELLO"), "pattern with only lowercase bracket class should be case-insensitive");
+        // A bracket class with uppercase should enable sensitivity only for that part.
+        let p2 = Pattern::new(r"[A-Z]+", MatchMode::Regexp).unwrap();
+        assert!(p2.matches("hello"), "bracket [A-Z] should not suppress global case-insensitivity");
     }
 
     #[test]
