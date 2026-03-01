@@ -15,7 +15,6 @@
 
 use std::sync::Arc;
 
-use aho_corasick::{AhoCorasick, AhoCorasickBuilder};
 use regex::Regex;
 
 // ── Public types ─────────────────────────────────────────────────────────────
@@ -54,7 +53,10 @@ enum Compiled {
     Regex(Arc<Regex>),
     Glob,
     Simple(String),
-    Substr(Arc<AhoCorasick>),
+    /// Stores the pattern lowercased for O(n·m) case-insensitive substring search.
+    /// AhoCorasick would be better for many patterns simultaneously, but for a
+    /// single trigger pattern the AC state-machine build overhead is not worth it.
+    Substr(String),
 }
 
 /// A compiled pattern ready for matching.
@@ -86,12 +88,7 @@ impl Pattern {
                 Compiled::Glob
             }
             MatchMode::Simple => Compiled::Simple(src.to_ascii_lowercase()),
-            MatchMode::Substr => {
-                let ac = AhoCorasickBuilder::new()
-                    .ascii_case_insensitive(true)
-                    .build([src]);
-                Compiled::Substr(Arc::new(ac))
-            }
+            MatchMode::Substr => Compiled::Substr(src.to_ascii_lowercase()),
         };
         Ok(Self {
             src: src.to_owned(),
@@ -130,7 +127,7 @@ impl Pattern {
                         .all(|(&a, &b)| a.eq_ignore_ascii_case(&b))
                 }
             }
-            Compiled::Substr(ac) => ac.is_match(text),
+            Compiled::Substr(lo) => substr_find_ascii_ci(text, lo).is_some(),
         }
     }
 
@@ -161,12 +158,14 @@ impl Pattern {
                     groups,
                 })
             }
-            Compiled::Substr(ac) => ac.find(text).map(|m| Captures {
-                text,
-                start: m.start(),
-                end: m.end(),
-                groups: vec![],
-            }),
+            Compiled::Substr(lo) => {
+                substr_find_ascii_ci(text, lo).map(|(start, end)| Captures {
+                    text,
+                    start,
+                    end,
+                    groups: vec![],
+                })
+            }
             _ => {
                 if self.matches(text) {
                     Some(Captures {
@@ -552,7 +551,30 @@ fn find_unescaped(haystack: &[u8], needle: u8) -> Option<usize> {
     None
 }
 
-// Case-insensitive substring search is now handled by `AhoCorasick` (Substr mode).
+/// ASCII-case-insensitive substring search.
+///
+/// Returns `Some((start, end))` byte offsets of the first occurrence of
+/// `lo_pattern` (which **must** already be ASCII-lowercased) in `text`.
+///
+/// This is an O(n·m) scan — acceptable for typical trigger patterns (short
+/// patterns, moderate text length).  For searching many patterns at once,
+/// use `aho_corasick` instead.
+fn substr_find_ascii_ci(text: &str, lo_pattern: &str) -> Option<(usize, usize)> {
+    let tb = text.as_bytes();
+    let pb = lo_pattern.as_bytes();
+    if pb.is_empty() {
+        return Some((0, 0));
+    }
+    'outer: for i in 0..=tb.len().saturating_sub(pb.len()) {
+        for (j, &p) in pb.iter().enumerate() {
+            if tb[i + j].to_ascii_lowercase() != p {
+                continue 'outer;
+            }
+        }
+        return Some((i, i + pb.len()));
+    }
+    None
+}
 
 // ── Glob syntax validation ────────────────────────────────────────────────────
 

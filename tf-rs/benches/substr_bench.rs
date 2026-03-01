@@ -1,18 +1,12 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use aho_corasick::AhoCorasickBuilder;
+use tf::pattern::{MatchMode, Pattern};
 
 fn old_alloc_unicode(hay: &str, needle: &str) -> bool {
     hay.to_lowercase().contains(&needle.to_lowercase())
 }
 
-fn build_ac(pattern: &str) -> aho_corasick::AhoCorasick {
-    AhoCorasickBuilder::new()
-        .ascii_case_insensitive(true)
-        .build([pattern])
-}
-
-fn ac_is_match(ac: &aho_corasick::AhoCorasick, hay: &str) -> bool {
-    ac.is_match(hay)
+fn new_pattern_match(pat: &Pattern, hay: &str) -> bool {
+    pat.matches(hay)
 }
 
 fn make_hay(repeats: usize) -> String {
@@ -26,29 +20,29 @@ fn bench_substr(c: &mut Criterion) {
     let hay_large = make_hay(10000); // ~450k
 
     let needle = "lazy";
-    let ac = build_ac(needle);
+    let pat = Pattern::new(needle, MatchMode::Substr).unwrap();
 
     let mut g = c.benchmark_group("substr_compare");
 
     g.bench_function("old_alloc_unicode_small", |b| {
         b.iter(|| old_alloc_unicode(black_box(&hay_small), black_box(needle)))
     });
-    g.bench_function("ac_small", |b| {
-        b.iter(|| ac_is_match(black_box(&ac), black_box(&hay_small)))
+    g.bench_function("new_ascii_ci_small", |b| {
+        b.iter(|| new_pattern_match(black_box(&pat), black_box(&hay_small)))
     });
 
     g.bench_function("old_alloc_unicode_med", |b| {
         b.iter(|| old_alloc_unicode(black_box(&hay_med), black_box(needle)))
     });
-    g.bench_function("ac_med", |b| {
-        b.iter(|| ac_is_match(black_box(&ac), black_box(&hay_med)))
+    g.bench_function("new_ascii_ci_med", |b| {
+        b.iter(|| new_pattern_match(black_box(&pat), black_box(&hay_med)))
     });
 
     g.bench_function("old_alloc_unicode_large", |b| {
         b.iter(|| old_alloc_unicode(black_box(&hay_large), black_box(needle)))
     });
-    g.bench_function("ac_large", |b| {
-        b.iter(|| ac_is_match(black_box(&ac), black_box(&hay_large)))
+    g.bench_function("new_ascii_ci_large", |b| {
+        b.iter(|| new_pattern_match(black_box(&pat), black_box(&hay_large)))
     });
 
     g.finish();
