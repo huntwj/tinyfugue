@@ -45,7 +45,7 @@ pub enum ScriptAction {
 
     // ── Process scheduling ─────────────────────────────────────────────────
     /// Schedule a `/repeat` process.
-    AddRepeat { interval_ms: u64, count: i32, body: String, world: Option<String> },
+    AddRepeat { interval_ms: u64, count: Option<u32>, body: String, world: Option<String> },
     /// Schedule a `/quote 'file` process.
     AddQuoteFile { interval_ms: u64, path: String, world: Option<String> },
     /// Schedule a `/quote !cmd` process.
@@ -2108,10 +2108,10 @@ fn parse_load_flags(args: &str) -> (bool, &str) {
 /// Parse `/repeat [-w world] interval [count] body` into `(interval_ms, count, body, world)`.
 ///
 /// - `interval` is in seconds (may be a float); converted to milliseconds.
-/// - `count` is optional; if the second token is also an integer it is the
-///   count, otherwise count defaults to `-1` (run forever).
+/// - `count` is optional; if the second token is also a positive integer it is
+///   the count, otherwise count defaults to `None` (run forever).
 /// - Everything after the interval (and optional count) is the body.
-fn parse_repeat_args(s: &str) -> (u64, i32, String, Option<String>) {
+fn parse_repeat_args(s: &str) -> (u64, Option<u32>, String, Option<String>) {
     let mut rest = s;
     let mut world: Option<String> = None;
 
@@ -2128,9 +2128,9 @@ fn parse_repeat_args(s: &str) -> (u64, i32, String, Option<String>) {
     let interval_ms = (interval_secs * 1000.0).max(1.0) as u64;
 
     let second = parts.next().unwrap_or("").trim();
-    let (count, body) = if let Ok(n) = second.parse::<i32>() {
+    let (count, body) = if let Ok(n) = second.parse::<u32>() {
         let b = parts.next().unwrap_or("").trim().to_owned();
-        (n, b)
+        (Some(n), b)
     } else {
         // second token is the beginning of the body
         let tail = parts.next().unwrap_or("").trim();
@@ -2139,7 +2139,7 @@ fn parse_repeat_args(s: &str) -> (u64, i32, String, Option<String>) {
         } else {
             format!("{second} {tail}")
         };
-        (-1, b)
+        (None, b)
     };
 
     (interval_ms, count, body, world)
@@ -2431,7 +2431,7 @@ mod tests {
         assert!(matches!(
             &actions[0],
             ScriptAction::AddRepeat { interval_ms, count, body, world: None }
-            if *interval_ms == 2000 && *count == -1 && body == "/echo hi"
+            if *interval_ms == 2000 && count.is_none() && body == "/echo hi"
         ));
     }
 
@@ -2443,7 +2443,7 @@ mod tests {
         assert!(matches!(
             &actions[0],
             ScriptAction::AddRepeat { interval_ms, count, body, world: None }
-            if *interval_ms == 1000 && *count == 5 && body == "hello"
+            if *interval_ms == 1000 && *count == Some(5) && body == "hello"
         ));
     }
 
@@ -2537,7 +2537,7 @@ mod tests {
     fn parse_repeat_args_fraction_seconds() {
         let (ms, count, body, world) = parse_repeat_args("0.5 walk");
         assert_eq!(ms, 500);
-        assert_eq!(count, -1);
+        assert!(count.is_none());
         assert_eq!(body, "walk");
         assert!(world.is_none());
     }

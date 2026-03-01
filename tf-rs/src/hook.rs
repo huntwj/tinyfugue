@@ -170,8 +170,8 @@ pub struct HookSet(u64);
 impl HookSet {
     /// The empty set.
     pub const NONE: Self = Self(0);
-    /// The universal set (every hook).
-    pub const ALL: Self = Self(u64::MAX);
+    /// The universal set (every valid hook; bits beyond COUNT are never set).
+    pub const ALL: Self = Self((1u64 << Hook::COUNT) - 1);
 
     /// Returns `true` if `hook` is in this set.
     #[inline]

@@ -48,23 +48,23 @@ pub struct Proc {
     pub interval: Duration,
     /// When this process should next fire.
     pub next_run: Instant,
-    /// Remaining runs; `-1` means run forever.
-    pub runs_left: i32,
+    /// Remaining runs; `None` means run forever.
+    pub runs_left: Option<u32>,
 }
 
 impl Proc {
     /// Whether this process should be rescheduled after firing.
     pub fn has_more_runs(&self) -> bool {
-        self.runs_left == -1 || self.runs_left > 1
+        self.runs_left.is_none_or(|n| n > 1)
     }
 
     /// Consume one run and update `next_run` to the next interval.
     ///
     /// Returns `true` if the process should continue (was rescheduled).
     pub fn tick(&mut self) -> bool {
-        if self.runs_left > 0 {
-            self.runs_left -= 1;
-            if self.runs_left == 0 {
+        if let Some(ref mut n) = self.runs_left {
+            *n -= 1;
+            if *n == 0 {
                 return false;
             }
         }
@@ -121,7 +121,7 @@ impl ProcessScheduler {
         &mut self,
         body: String,
         interval: Duration,
-        count: i32,
+        count: Option<u32>,
         world: Option<String>,
     ) -> u32 {
         self.add(ProcKind::Repeat { body }, interval, count, world)
@@ -132,7 +132,7 @@ impl ProcessScheduler {
         &mut self,
         path: PathBuf,
         interval: Duration,
-        count: i32,
+        count: Option<u32>,
         world: Option<String>,
     ) -> u32 {
         self.add(ProcKind::QuoteFile { path, pos: 0 }, interval, count, world)
@@ -143,13 +143,13 @@ impl ProcessScheduler {
         &mut self,
         command: String,
         interval: Duration,
-        count: i32,
+        count: Option<u32>,
         world: Option<String>,
     ) -> u32 {
         self.add(ProcKind::QuoteShell { command }, interval, count, world)
     }
 
-    fn add(&mut self, kind: ProcKind, interval: Duration, count: i32, world: Option<String>) -> u32 {
+    fn add(&mut self, kind: ProcKind, interval: Duration, count: Option<u32>, world: Option<String>) -> u32 {
         let id = self.next_id;
         self.next_id += 1;
         self.procs.push(Proc {
@@ -231,7 +231,7 @@ mod tests {
     #[test]
     fn add_and_remove() {
         let mut s = ProcessScheduler::new();
-        let id = s.add_repeat("echo hi".into(), ms(100), 3, None);
+        let id = s.add_repeat("echo hi".into(), ms(100), Some(3), None);
         assert_eq!(s.len(), 1);
         assert!(s.remove(id));
         assert!(s.is_empty());
@@ -253,8 +253,8 @@ mod tests {
     fn next_wakeup_returns_soonest() {
         let mut s = ProcessScheduler::new();
         // First process fires in 200ms, second in 50ms.
-        s.add_repeat("a".into(), ms(200), -1, None);
-        s.add_repeat("b".into(), ms(50), -1, None);
+        s.add_repeat("a".into(), ms(200), None, None);
+        s.add_repeat("b".into(), ms(50), None, None);
         // next_wakeup must be <= now + 200ms and > now.
         let wake = s.next_wakeup().unwrap();
         let now = Instant::now();
@@ -274,7 +274,7 @@ mod tests {
             world: None,
             interval: ms(100),
             next_run: now - ms(1), // already overdue
-            runs_left: -1,
+            runs_left: None,
         });
         // And one that's not due yet.
         s.procs.push(Proc {
@@ -283,7 +283,7 @@ mod tests {
             world: None,
             interval: ms(100),
             next_run: now + ms(1000),
-            runs_left: -1,
+            runs_left: None,
         });
 
         let ready = s.take_ready(now);
@@ -302,14 +302,14 @@ mod tests {
             world: None,
             interval: ms(50),
             next_run: now - ms(1),
-            runs_left: 3,
+            runs_left: Some(3),
         });
         let mut ready = s.take_ready(now);
         assert_eq!(ready.len(), 1);
         let mut p = ready.remove(0);
         let keep = p.tick();
         assert!(keep);
-        assert_eq!(p.runs_left, 2);
+        assert_eq!(p.runs_left, Some(2));
         s.reschedule(p);
         assert_eq!(s.len(), 1);
     }
@@ -322,7 +322,7 @@ mod tests {
             world: None,
             interval: ms(10),
             next_run: Instant::now(),
-            runs_left: 2,
+            runs_left: Some(2),
         };
         assert!(p.tick());   // 2 → 1, keep going
         assert!(!p.tick());  // 1 → 0, done
@@ -336,7 +336,7 @@ mod tests {
             world: None,
             interval: ms(10),
             next_run: Instant::now(),
-            runs_left: -1,
+            runs_left: None,
         };
         for _ in 0..1000 {
             assert!(p.tick());
@@ -346,8 +346,8 @@ mod tests {
     #[test]
     fn kill_all_clears_all_processes() {
         let mut s = ProcessScheduler::new();
-        s.add_repeat("a".into(), ms(100), -1, None);
-        s.add_repeat("b".into(), ms(200), -1, None);
+        s.add_repeat("a".into(), ms(100), None, None);
+        s.add_repeat("b".into(), ms(200), None, None);
         s.kill_all();
         assert!(s.is_empty());
     }

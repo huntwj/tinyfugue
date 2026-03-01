@@ -705,12 +705,12 @@ impl EventLoop {
 
             ScriptAction::AddQuoteFile { interval_ms, path, world } => {
                 let interval = Duration::from_millis(interval_ms);
-                self.scheduler.add_quote_file(PathBuf::from(path), interval, -1, world);
+                self.scheduler.add_quote_file(PathBuf::from(path), interval, None, world);
             }
 
             ScriptAction::AddQuoteShell { interval_ms, command, world } => {
                 let interval = Duration::from_millis(interval_ms);
-                self.scheduler.add_quote_shell(command, interval, -1, world);
+                self.scheduler.add_quote_shell(command, interval, None, world);
             }
 
             ScriptAction::QuoteFileSync { path, world } => {
@@ -1111,11 +1111,7 @@ impl EventLoop {
                                 ("quote", path.to_str().unwrap_or("?")),
                             ProcKind::QuoteShell { command } => ("quote!", command.as_str()),
                         };
-                        let runs = if p.runs_left == -1 {
-                            "∞".to_owned()
-                        } else {
-                            p.runs_left.to_string()
-                        };
+                        let runs = p.runs_left.map_or("∞".to_owned(), |n| n.to_string());
                         let interval_ms = p.interval.as_millis();
                         let line = format!(
                             "% {:<4} {:<8} {:>6}ms  {:>4}  {}",

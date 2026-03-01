@@ -382,7 +382,7 @@ impl MacroStore {
         let mut lowest_nonfallthru_pri: Option<i32> = None;
 
         for &num in &self.trig_list {
-            let mac = &self.macros[&num];
+            let mac = self.macros.get(&num).expect("trig_list/hook_lists contains only valid macro nums");
 
             // Once we've locked in the non-fallthru priority, skip lower ones.
             if let Some(limit) = lowest_nonfallthru_pri {
@@ -436,7 +436,7 @@ impl MacroStore {
         let mut lowest_nonfallthru_pri: Option<i32> = None;
 
         for &num in &self.hook_lists[idx] {
-            let mac = &self.macros[&num];
+            let mac = self.macros.get(&num).expect("trig_list/hook_lists contains only valid macro nums");
 
             if let Some(limit) = lowest_nonfallthru_pri {
                 if mac.priority < limit {

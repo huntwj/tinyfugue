@@ -343,7 +343,7 @@ loudly at first use.
 
 ### L5 — `hook.rs`: `HookSet::ALL` sets unused bits 35–63
 **File:** `hook.rs`
-**Status:** [ ]
+**Status:** [x]
 
 `HookSet::ALL = u64::MAX` sets bits 35–63 which correspond to no valid hook variant.
 This means `HookSet::ALL != (all 35 individual hooks OR'd together)`, which could
@@ -369,7 +369,7 @@ into a single sentinel if the distinction is not needed.
 
 ### L7 — `macros.rs`: `&self.macros[&num]` panics without useful message
 **File:** `macros.rs` `find_triggers` ~line 385
-**Status:** [ ]
+**Status:** [x]
 
 The HashMap indexing operator panics with an unhelpful message if the invariant
 ("`trig_list` only contains valid `num` values") is ever violated.
@@ -383,7 +383,7 @@ let mac = self.macros.get(&num).expect("trig_list contains only valid macro nums
 
 ### L8 — `process.rs`: `-1` sentinel for "infinite runs"
 **File:** `process.rs` `Proc` struct
-**Status:** [ ]
+**Status:** [x]
 
 `runs_left: i32` uses `-1` as a sentinel for "run forever". This is not idiomatic Rust.
 
