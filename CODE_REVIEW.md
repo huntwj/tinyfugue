@@ -103,7 +103,7 @@ fn regex_match(text: &str, pattern: &str) -> bool {
 
 ### H6 — Fixed PRNG seed makes probabilistic triggers deterministic
 **File:** `macros.rs` ~line 556
-**Status:** [ ]
+**Status:** [x]
 
 The xorshift64 PRNG is seeded with a compile-time constant. `/def -pN` (probability-based
 macro selection) produces identical results across every session and every restart.

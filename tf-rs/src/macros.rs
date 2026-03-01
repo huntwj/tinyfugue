@@ -549,14 +549,37 @@ fn pick_one<'a>(candidates: &[&'a Macro]) -> Option<&'a Macro> {
 
 // ── Minimal PRNG (xorshift64, thread-local) ───────────────────────────────────
 
+fn os_rand_seed() -> u64 {
+    use std::io::Read;
+    let mut buf = [0u8; 8];
+    if std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| f.read_exact(&mut buf))
+        .is_err()
+    {
+        // Fallback: mix in current time if /dev/urandom is unavailable.
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let ns = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(1);
+        buf[..4].copy_from_slice(&ns.to_ne_bytes());
+        buf[4..].copy_from_slice(&ns.wrapping_add(0x9e37_79b9).to_ne_bytes());
+    }
+    let seed = u64::from_ne_bytes(buf);
+    // xorshift64 requires a non-zero seed.
+    if seed == 0 { 0x517c_c1b7_2722_0a95 } else { seed }
+}
+
 fn rand_u64() -> u64 {
     use std::cell::Cell;
     thread_local! {
-        // Seed is non-zero; in production this would be seeded from the OS.
-        static STATE: Cell<u64> = const { Cell::new(0x517c_c1b7_2722_0a95) };
+        static STATE: Cell<u64> = const { Cell::new(0) }; // initialised lazily on first call
     }
     STATE.with(|s| {
         let mut x = s.get();
+        if x == 0 {
+            x = os_rand_seed();
+        }
         x ^= x << 13;
         x ^= x >> 7;
         x ^= x << 17;
