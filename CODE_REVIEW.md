@@ -296,7 +296,7 @@ executor thread, blocking all async I/O for the duration of the read.
 
 ### L1 — `main.rs`: `ver` binding declared twice
 **File:** `main.rs` lines 11 and 135
-**Status:** [ ]
+**Status:** [x]
 
 `let ver = env!("CARGO_PKG_VERSION")` is declared at the top of `main()` and again
 before the in-UI banner. The second shadows the first with the identical value.
@@ -307,7 +307,7 @@ before the in-UI banner. The second shadows the first with the identical value.
 
 ### L2 — `cli.rs`: `install_embedded_libs` takes `&PathBuf` not `&Path`
 **File:** `cli.rs` `install_embedded_libs` signature
-**Status:** [ ]
+**Status:** [x]
 
 `&PathBuf` prevents callers from passing `&Path` directly and triggers clippy `ptr_arg`.
 
@@ -317,7 +317,7 @@ before the in-UI banner. The second shadows the first with the identical value.
 
 ### L3 — `cli.rs`: `find_user_config` constructs `"/.tfrc"` when `$HOME` unset
 **File:** `cli.rs` `find_user_config`
-**Status:** [ ]
+**Status:** [x]
 
 `std::env::var("HOME").unwrap_or_default()` silently uses `""` if `HOME` is unset,
 producing paths like `"/.tfrc"` (root's config directory).
@@ -331,7 +331,7 @@ let home = std::env::var("HOME").ok().filter(|h| !h.is_empty())?;
 
 ### L4 — `embedded.rs`: silent UTF-8 decode failure
 **File:** `embedded.rs` `get_embedded` / `all_embedded`
-**Status:** [ ]
+**Status:** [x]
 
 `std::str::from_utf8(f.content).ok()` silently skips files with invalid UTF-8, making
 them invisible rather than surfacing corruption at startup.

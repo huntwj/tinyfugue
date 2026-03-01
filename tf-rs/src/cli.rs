@@ -70,9 +70,9 @@ pub enum LibSource {
 
 impl LibSource {
     /// The path reported as `%TFLIBDIR` inside TF.
-    pub fn as_path(&self) -> &PathBuf {
+    pub fn as_path(&self) -> &std::path::Path {
         match self {
-            LibSource::Path(p) | LibSource::Embedded(p) => p,
+            LibSource::Path(p) | LibSource::Embedded(p) => p.as_path(),
         }
     }
 }
@@ -218,16 +218,15 @@ pub fn parse_argv(argv: &[String]) -> Result<CliArgs, String> {
 /// Search for the user config file in the standard locations.
 /// Returns the first path that exists, or `None`.
 pub fn find_user_config() -> Option<PathBuf> {
-    let home = std::env::var("HOME").unwrap_or_default();
-    [
-        format!("{home}/.tfrc"),
-        format!("{home}/tfrc"),
-        "./.tfrc".to_owned(),
-        "./tfrc".to_owned(),
-    ]
-    .into_iter()
-    .map(PathBuf::from)
-    .find(|p| p.exists())
+    let home = std::env::var("HOME").ok().filter(|h| !h.is_empty());
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(ref h) = home {
+        candidates.push(PathBuf::from(format!("{h}/.tfrc")));
+        candidates.push(PathBuf::from(format!("{h}/tfrc")));
+    }
+    candidates.push(PathBuf::from("./.tfrc"));
+    candidates.push(PathBuf::from("./tfrc"));
+    candidates.into_iter().find(|p| p.exists())
 }
 
 /// Return the OS-appropriate user data directory for TF library files.
@@ -293,7 +292,7 @@ pub fn resolve_libdir(cli_override: Option<&PathBuf>) -> LibSource {
 ///
 /// Existing files are skipped (preserves user customisations).
 /// Returns the number of files newly written.
-pub fn install_embedded_libs(dest: &PathBuf) -> Result<usize, String> {
+pub fn install_embedded_libs(dest: &std::path::Path) -> Result<usize, String> {
     std::fs::create_dir_all(dest)
         .map_err(|e| format!("cannot create {}: {e}", dest.display()))?;
 

@@ -147,7 +147,6 @@ async fn main() {
     }
 
     // ── Startup banner (mirrors C TF's oputs() calls in main.c) ─────────────
-    let ver = env!("CARGO_PKG_VERSION");
     event_loop.push_output(&format!("TinyFugue (tf) version {ver} (Rust rewrite)"));
     event_loop.push_output(
         "Copyright (C) 1993-2007 Ken Keys.  \

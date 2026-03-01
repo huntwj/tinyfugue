@@ -75,14 +75,15 @@ pub fn get_embedded(name: &str) -> Option<&'static str> {
     EMBEDDED_LIBS
         .iter()
         .find(|f| f.name == name)
-        .and_then(|f| std::str::from_utf8(f.content).ok())
+        .map(|f| std::str::from_utf8(f.content)
+            .unwrap_or_else(|_| panic!("embedded file '{name}' contains invalid UTF-8")))
 }
 
 /// Iterate over all embedded files as `(name, utf8_content)` pairs.
 pub fn all_embedded() -> impl Iterator<Item = (&'static str, &'static str)> {
-    EMBEDDED_LIBS.iter().filter_map(|f| {
-        std::str::from_utf8(f.content)
-            .ok()
-            .map(|s| (f.name, s))
+    EMBEDDED_LIBS.iter().map(|f| {
+        let content = std::str::from_utf8(f.content)
+            .unwrap_or_else(|_| panic!("embedded file '{}' contains invalid UTF-8", f.name));
+        (f.name, content)
     })
 }
