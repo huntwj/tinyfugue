@@ -20,7 +20,7 @@ python = ["dep:pyo3"]
 regex = "1"
 aho-corasick = "0.7"
 crossterm = "0.28"
-tokio = { version = "1", features = ["net", "io-util", "io-std", "rt-multi-thread", "macros", "signal", "time", "process", "sync"] }
+tokio = { version = "1", features = ["net", "io-util", "io-std", "rt-multi-thread", "macros", "signal", "time", "process", "sync", "fs"] }
 tokio-rustls = "0.26"
 webpki-roots = "0.26"
 flate2 = "1"
@@ -29,7 +29,8 @@ directories = "5"
 mlua = { version = "0.10", features = ["lua54", "vendored"], optional = true }
 pyo3 = { version = "0.22", optional = true }
 
+tempfile = "3"
+
 [dev-dependencies]
 criterion = "0.5"
 proptest = "1.0"
-tempfile = "3"

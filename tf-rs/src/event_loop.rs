@@ -318,7 +318,7 @@ pub struct EventLoop {
     need_refresh: bool,
 
     /// Open log file (mirrors `/log path`).
-    log_file: Option<std::fs::File>,
+    log_file: Option<tokio::fs::File>,
 
     /// Format string for the status bar.  Tokens: `%world`, `%T` (HH:MM),
     /// `%t` (HH:MM:SS).  Defaults to `"[ %world ]  %T"`.
@@ -715,15 +715,13 @@ impl EventLoop {
 
             ScriptAction::QuoteFileSync { path, world } => {
                 // Send all lines from the file immediately, no scheduling delay.
-                use std::io::BufRead;
                 let target = world.or_else(|| self.active_world.clone());
                 if let Some(ref w) = target {
-                    if let Ok(file) = std::fs::File::open(&path) {
-                        let reader = std::io::BufReader::new(file);
+                    if let Ok(contents) = tokio::fs::read_to_string(&path).await {
                         let world_name = w.clone();
-                        for line in reader.lines().map_while(Result::ok) {
+                        for line in contents.lines() {
                             if let Some(handle) = self.handles.get(&world_name) {
-                                handle.send_line(&line).await;
+                                handle.send_line(line).await;
                             }
                         }
                     }
@@ -804,7 +802,7 @@ impl EventLoop {
             // ── Session logging ───────────────────────────────────────────
 
             ScriptAction::StartLog(path) => {
-                match std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+                match tokio::fs::OpenOptions::new().create(true).append(true).open(&path).await {
                     Ok(file) => {
                         self.log_file = Some(file);
                         let msg = format!("% Logging to {path}");
@@ -872,7 +870,6 @@ impl EventLoop {
             // ── Miscellaneous ─────────────────────────────────────────────
 
             ScriptAction::SaveWorlds { path, name } => {
-                use std::io::Write;
                 let lines: Vec<String> = self
                     .worlds
                     .iter()
@@ -881,11 +878,9 @@ impl EventLoop {
                     .collect();
                 match path {
                     Some(p) => {
-                        match std::fs::OpenOptions::new()
-                            .create(true).write(true).truncate(true).open(&p)
-                        {
-                            Ok(mut f) => {
-                                for line in &lines { let _ = writeln!(f, "{line}"); }
+                        let content = lines.join("\n") + "\n";
+                        match tokio::fs::write(&p, &content).await {
+                            Ok(()) => {
                                 let msg = format!("% Saved {} world(s) to {p}", lines.len());
                                 self.screen.push_line(LogicalLine::plain(&msg));
                             }
@@ -1011,7 +1006,7 @@ impl EventLoop {
                 // re-enter raw mode and repaint when it exits.
                 let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_owned());
                 crossterm::terminal::disable_raw_mode().ok();
-                let _ = std::process::Command::new(&shell).status();
+                let _ = tokio::process::Command::new(&shell).status().await;
                 crossterm::terminal::enable_raw_mode().ok();
                 self.need_refresh = true;
             }
@@ -1023,20 +1018,21 @@ impl EventLoop {
                     .or_else(|_| std::env::var("VISUAL"))
                     .unwrap_or_else(|_| "vi".to_owned());
                 let current_text = self.input.editor.text();
-                // Write buffer to a temporary file.
-                let tmp_path = std::env::temp_dir().join(format!("tf_edit_{}.txt", std::process::id()));
-                let written = std::fs::write(&tmp_path, &current_text).is_ok();
-                if written {
-                    crossterm::terminal::disable_raw_mode().ok();
-                    let _ = std::process::Command::new(&editor).arg(&tmp_path).status();
-                    crossterm::terminal::enable_raw_mode().ok();
-                    // Read back and re-insert (strip trailing newline).
-                    if let Ok(mut edited) = std::fs::read_to_string(&tmp_path) {
-                        if edited.ends_with('\n') { edited.pop(); }
-                        if edited.ends_with('\r') { edited.pop(); }
-                        self.input.editor.set_text(&edited);
+                // Use a securely-created temp file (avoids predictable-path symlink attacks).
+                if let Ok(tmp) = tempfile::NamedTempFile::new() {
+                    let tmp_path = tmp.path().to_owned();
+                    if tokio::fs::write(&tmp_path, &current_text).await.is_ok() {
+                        crossterm::terminal::disable_raw_mode().ok();
+                        let _ = tokio::process::Command::new(&editor).arg(&tmp_path).status().await;
+                        crossterm::terminal::enable_raw_mode().ok();
+                        // Read back and re-insert (strip trailing newline).
+                        if let Ok(mut edited) = tokio::fs::read_to_string(&tmp_path).await {
+                            if edited.ends_with('\n') { edited.pop(); }
+                            if edited.ends_with('\r') { edited.pop(); }
+                            self.input.editor.set_text(&edited);
+                        }
                     }
-                    let _ = std::fs::remove_file(&tmp_path);
+                    // tmp is dropped here — NamedTempFile deletes the file on drop.
                 }
                 self.need_refresh = true;
             }
@@ -1085,12 +1081,9 @@ impl EventLoop {
                         }
                     }
                     Some(p) => {
-                        use std::io::Write;
-                        match std::fs::File::create(&p) {
-                            Ok(mut f) => {
-                                for line in &lines {
-                                    let _ = writeln!(f, "{line}");
-                                }
+                        let content = lines.join("\n") + "\n";
+                        match tokio::fs::write(&p, &content).await {
+                            Ok(()) => {
                                 let msg = format!("% Saved {} macro(s) to {p}.", lines.len());
                                 self.screen.push_line(LogicalLine::plain(&msg));
                             }
@@ -1170,8 +1163,8 @@ impl EventLoop {
                     };
                     self.screen.push_line(ll);
                     if let Some(ref mut f) = self.log_file {
-                        use std::io::Write;
-                        let _ = writeln!(f, "{line}");
+                        use tokio::io::AsyncWriteExt;
+                        let _ = f.write_all(format!("{line}\n").as_bytes()).await;
                     }
                 }
 
@@ -1366,8 +1359,8 @@ impl EventLoop {
                     self.screen.push_line(line);
                     // Write to log file if open.
                     if let Some(ref mut f) = self.log_file {
-                        use std::io::Write;
-                        let _ = writeln!(f, "{text}");
+                        use tokio::io::AsyncWriteExt;
+                        let _ = f.write_all(format!("{text}\n").as_bytes()).await;
                     }
                 }
 

@@ -9,7 +9,7 @@ Each item has a status (`[ ]` open, `[x]` fixed), severity, file reference, and 
 
 ### H1 — Blocking I/O inside async event loop
 **File:** `event_loop.rs` (multiple handlers)
-**Status:** [ ]
+**Status:** [x]
 
 `QuoteFileSync`, `StartLog`, `SaveWorlds`, `ShellInteractive`, `EditInput`, and `SaveMacros`
 handlers all use `std::fs`/`std::process::Command` (blocking) inside async handler code.
@@ -24,7 +24,7 @@ write or an external editor to exit.
 
 ### H2 — Predictable temp file name (symlink attack)
 **File:** `event_loop.rs` ~line 1027 (`EditInput` handler)
-**Status:** [ ]
+**Status:** [x]
 
 `format!("tf_edit_{}.txt", std::process::id())` creates a predictable path in `/tmp/`.
 Classic TOCTOU symlink attack: another process can create a symlink at that path before
