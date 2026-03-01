@@ -271,15 +271,27 @@ impl Screen {
     // ── Internal ─────────────────────────────────────────────────────────
 
     /// Drop oldest logical lines when the buffer exceeds `max_lines`.
+    ///
+    /// O(n) in `physlines` regardless of how many logical lines are dropped:
+    /// one linear scan to find the split point, one `drain`, one linear pass
+    /// to decrement indices.
     fn trim_to_max(&mut self) {
-        while self.lines.len() > self.max_lines {
+        let drop_count = self.lines.len().saturating_sub(self.max_lines);
+        if drop_count == 0 {
+            return;
+        }
+        for _ in 0..drop_count {
             self.lines.pop_front();
-            // Remove physlines for the dropped logical line (they were idx 0).
-            self.physlines.retain(|pl| pl.logical_idx > 0);
-            // Re-index surviving physlines.
-            for pl in &mut self.physlines {
-                pl.logical_idx -= 1;
-            }
+        }
+        // Find the first physline belonging to a surviving logical line.
+        // Physlines are in order, so `logical_idx >= drop_count` marks the boundary.
+        let split = self
+            .physlines
+            .partition_point(|pl| pl.logical_idx < drop_count);
+        self.physlines.drain(..split);
+        // Re-index surviving physlines in one pass.
+        for pl in &mut self.physlines {
+            pl.logical_idx -= drop_count;
         }
     }
 

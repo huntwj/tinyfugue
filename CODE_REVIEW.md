@@ -194,7 +194,7 @@ recursion depth limit that returns `false` when exceeded.
 
 ### M2 — Single-pattern `AhoCorasick` for `Substr` matches
 **File:** `pattern.rs` (`Pattern::Substr` compilation)
-**Status:** [ ]
+**Status:** [x]
 
 `AhoCorasick` is heap-allocated for single-pattern substring search. AC provides its
 benefit when matching many patterns simultaneously. For a single pattern, `str::find`
@@ -207,7 +207,7 @@ benefit when matching many patterns simultaneously. For a single pattern, `str::
 
 ### M3 — `screen.rs` `trim_to_max` is O(n²)
 **File:** `screen.rs` `trim_to_max` ~lines 274–283
-**Status:** [ ]
+**Status:** [x]
 
 For each logical line dropped, `retain` is called on the entire `physlines` Vec.
 Dropping 100 logical lines is 100 × O(physlines) work.
@@ -245,7 +245,7 @@ reports the actual bad character.
 
 ### M6 — `input.rs` `text()` allocates `String` on every keystroke
 **File:** `input.rs` `LineEditor::text()` ~line 48
-**Status:** [ ]
+**Status:** [x]
 
 `self.buf.iter().collect::<String>()` allocates a new `String` on every call.
 `text()` is called from `sync_kb_globals`, `refresh_display`, and `render_input` —
@@ -270,7 +270,7 @@ at minimum redirect it to `sys.stderr` so output appears somewhere.
 
 ### M8 — `invoke_macro` unknown-command path is silent
 **File:** `script/interp.rs` `exec_builtin` unknown-command fallthrough
-**Status:** [ ]
+**Status:** [x]
 
 Unknown commands silently return `Ok(None)`. While this matches C TF behaviour, it
 makes diagnosing typos in macro bodies nearly impossible.
@@ -282,7 +282,7 @@ output when a command is not recognised. Make it suppressable with a flag if nee
 
 ### M9 — `lua.rs` / `python.rs` blocking file read in async context
 **File:** `python.rs` `run_file` ~line 244
-**Status:** [ ]
+**Status:** [x]
 
 `std::fs::read_to_string` is called to load a Python script file while on the tokio
 executor thread, blocking all async I/O for the duration of the read.
@@ -356,7 +356,7 @@ number of hook variants.
 
 ### L6 — `attr.rs`: `Attr::NONE` vs `Attr::EMPTY` confusing
 **File:** `attr.rs`
-**Status:** [ ]
+**Status:** [x]
 
 Two distinct "empty" sentinel values exist: `EMPTY` (all bits zero) and `NONE` (bit 5
 set). `attr.contains(Attr::NONE)` returns `false` for an `EMPTY` attr, which is
@@ -430,7 +430,7 @@ increment rather than a recompile.
 
 ### L12 — `pattern.rs`: `has_unescaped_upper` ignores bracket classes
 **File:** `pattern.rs` `has_unescaped_upper`
-**Status:** [ ]
+**Status:** [x]
 
 An uppercase letter inside a bracket class like `[A-Z]` is incorrectly detected as
 "has uppercase", suppressing the case-insensitive flag for the entire pattern including
@@ -443,7 +443,7 @@ bracket classes.
 
 ### L13 — `history.rs`: `recall` loop invariant should be documented
 **File:** `history.rs` `recall` prefix-search ~lines 152–196
-**Status:** [ ]
+**Status:** [x]
 
 The loop uses `pos == start` to detect "wrapped all the way around with no match", but
 the logic is non-obvious and fragile. A comment explaining the invariant would help
@@ -453,7 +453,7 @@ future maintainers.
 
 ### L14 — `script/stmt.rs`: `is_body_cmd` does not cover command abbreviations
 **File:** `script/stmt.rs` `is_body_cmd` ~lines 152–158
-**Status:** [ ]
+**Status:** [x]
 
 Only checks full command names (`/def`, `/trigger`, etc.). If the interpreter accepts
 abbreviated forms (e.g., `/d` for `/def`), `is_body_cmd` would miss them and incorrectly
