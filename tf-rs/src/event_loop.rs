@@ -1733,57 +1733,68 @@ impl EventLoop {
         use crate::script::expr::eval_str;
         let width = self.terminal.width as usize;
         let fields = self.status_fields.clone();
-        let mut text = String::new();
 
+        // Pass 1: evaluate every field's content.
+        let mut contents: Vec<String> = Vec::with_capacity(fields.len());
         for field in &fields {
-            if text.chars().count() >= width {
-                break;
-            }
-
             let content = if field.name.is_empty() {
-                // Spacer field: underscore fill (matches C TF's status bar style).
-                "_".repeat(field.width.unwrap_or(1))
+                // Spacer field: always has an explicit width; fill is handled in pass 2.
+                String::new()
             } else {
-                // Look up the expression in status_int_<name> first, then status_var_<name>.
                 let int_key = format!("status_int_{}", field.name);
                 let var_key = format!("status_var_{}", field.name);
                 let expr = self.interp.get_global_var(&int_key)
                     .or_else(|| self.interp.get_global_var(&var_key))
                     .map(|v: &crate::script::Value| v.to_string())
                     .unwrap_or_default();
-
                 if expr.is_empty() {
                     String::new()
-                } else if field.dynamic {
-                    // Dynamic: evaluate as a TF expression.
-                    eval_str(&expr, &mut self.interp)
-                        .unwrap_or_default()
-                        .to_string()
                 } else {
-                    // Static: evaluate the expression (e.g. TF ternary/function calls).
                     eval_str(&expr, &mut self.interp)
                         .unwrap_or_default()
                         .to_string()
                 }
             };
+            contents.push(content);
+        }
 
-            // Pad or truncate to the field's column width.
-            // C TF uses '_' as the background fill for the status bar, so empty
-            // portions of each field are padded with underscores, not spaces.
-            let padded = match field.width {
-                Some(w) => {
-                    let chars: Vec<char> = content.chars().collect();
-                    if chars.len() >= w {
-                        chars[..w].iter().collect()
-                    } else {
-                        let mut s: String = chars.iter().collect();
-                        while s.chars().count() < w { s.push('_'); }
-                        s
-                    }
-                }
-                None => content,
+        // Pass 2: compute how much space each auto-width field (width=None) gets.
+        // Fixed-width fields (including spacers) consume a known number of columns;
+        // the remainder is divided equally among auto-width fields.  This makes
+        // fields like @world elastic so the clock ends up at the right edge.
+        let fixed_total: usize = fields.iter().filter_map(|f| f.width).sum();
+        let auto_count = fields.iter().filter(|f| f.width.is_none()).count();
+        let auto_width = if auto_count > 0 {
+            width.saturating_sub(fixed_total) / auto_count
+        } else {
+            0
+        };
+
+        // Pass 3: build the final string with proper padding/truncation.
+        // C TF uses '_' as the fill character for the status bar.
+        let pad_to = |s: &str, target: usize| -> String {
+            let chars: Vec<char> = s.chars().collect();
+            if chars.len() >= target {
+                chars[..target].iter().collect()
+            } else {
+                let mut out: String = chars.iter().collect();
+                while out.chars().count() < target { out.push('_'); }
+                out
+            }
+        };
+
+        let mut text = String::new();
+        for (field, content) in fields.iter().zip(contents.iter()) {
+            if text.chars().count() >= width {
+                break;
+            }
+            let target = match field.width {
+                Some(w) => w,
+                None => auto_width,
             };
-            text.push_str(&padded);
+            // Spacer fields render as underscores; named fields use their content.
+            let src = if field.name.is_empty() { "" } else { content.as_str() };
+            text.push_str(&pad_to(src, target));
         }
         text
     }
