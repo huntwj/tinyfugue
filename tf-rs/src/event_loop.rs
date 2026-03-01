@@ -428,6 +428,27 @@ impl EventLoop {
                     if let Some(n) = &mac.name { self.interp.macro_names.insert(n.clone()); }
                     self.macro_store.add(mac);
                 }
+                // Status bar configuration is safe to apply at startup.
+                ScriptAction::StatusAdd { clear, raw } => {
+                    if clear { self.status_fields.clear(); }
+                    let new_fields = parse_field_list(&raw);
+                    self.status_fields.extend(new_fields);
+                    self.sync_status_fields_global();
+                }
+                ScriptAction::StatusRm(name) => {
+                    self.status_fields.retain(|f| f.name != name);
+                    self.sync_status_fields_global();
+                }
+                ScriptAction::StatusEdit { name, raw } => {
+                    if let Some(f) = self.status_fields.iter_mut().find(|f| f.name == name) {
+                        *f = parse_field_spec(&raw);
+                    }
+                    self.sync_status_fields_global();
+                }
+                ScriptAction::StatusClear => {
+                    self.status_fields.clear();
+                    self.sync_status_fields_global();
+                }
                 _ => {}
             }
         }
@@ -1718,8 +1739,8 @@ impl EventLoop {
             }
 
             let content = if field.name.is_empty() {
-                // Spacer field: just spaces.
-                " ".repeat(field.width.unwrap_or(1))
+                // Spacer field: underscore fill (matches C TF's status bar style).
+                "_".repeat(field.width.unwrap_or(1))
             } else {
                 // Look up the expression in status_int_<name> first, then status_var_<name>.
                 let int_key = format!("status_int_{}", field.name);

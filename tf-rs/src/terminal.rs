@@ -346,7 +346,7 @@ impl Terminal {
 
         for (i, sl) in lines.iter().enumerate().take(self.status_height as usize) {
             let row = top + i as u16;
-            let text = pad_or_truncate(&sl.text, width);
+            let text = pad_or_truncate(&sl.text, width, '_');
             let style = attr_style(sl.attr | Attr::REVERSE); // default: reversed
             queue!(
                 self.out,
@@ -440,14 +440,14 @@ fn merge_styles(base: ContentStyle, overlay: ContentStyle) -> ContentStyle {
 }
 
 /// Pad `s` with spaces to exactly `width` chars, or truncate if too long.
-fn pad_or_truncate(s: &str, width: usize) -> String {
+fn pad_or_truncate(s: &str, width: usize, fill: char) -> String {
     let count = s.chars().count();
     if count >= width {
         s.chars().take(width).collect()
     } else {
         let mut out = s.to_owned();
         for _ in 0..(width - count) {
-            out.push(' ');
+            out.push(fill);
         }
         out
     }
@@ -539,17 +539,17 @@ mod tests {
 
     #[test]
     fn pad_short_string() {
-        assert_eq!(pad_or_truncate("hi", 5), "hi   ");
+        assert_eq!(pad_or_truncate("hi", 5, ' '), "hi   ");
     }
 
     #[test]
     fn truncate_long_string() {
-        assert_eq!(pad_or_truncate("hello world", 5), "hello");
+        assert_eq!(pad_or_truncate("hello world", 5, ' '), "hello");
     }
 
     #[test]
     fn exact_length_unchanged() {
-        assert_eq!(pad_or_truncate("exact", 5), "exact");
+        assert_eq!(pad_or_truncate("exact", 5, ' '), "exact");
     }
 
     // ── StatusLine ────────────────────────────────────────────────────────────
