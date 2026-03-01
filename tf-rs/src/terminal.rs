@@ -152,6 +152,23 @@ impl Terminal {
         Ok(RawModeGuard(()))
     }
 
+    /// Restore the terminal to a shell-friendly state before exiting.
+    ///
+    /// Clears the status bar and input line, then leaves the cursor at the
+    /// top of the now-blank area so the shell prompt appears right below the
+    /// last line of session output.  Call this while still in raw mode,
+    /// before the `RawModeGuard` is dropped.
+    pub fn cleanup(&mut self) {
+        let row = self.status_top();
+        let _ = crossterm::execute!(
+            self.out,
+            cursor::MoveTo(0, row),
+            terminal::Clear(terminal::ClearType::FromCursorDown),
+            cursor::Show,
+        );
+        let _ = self.out.flush();
+    }
+
     /// Update stored dimensions after a `SIGWINCH` / resize event.
     pub fn handle_resize(&mut self, width: u16, height: u16) {
         self.width = width;
@@ -416,12 +433,10 @@ pub struct RawModeGuard(());
 
 impl Drop for RawModeGuard {
     fn drop(&mut self) {
-        // Move cursor to a known position and show it before leaving raw mode.
-        let _ = crossterm::execute!(
-            std::io::stdout(),
-            cursor::Show,
-            cursor::MoveTo(0, 0)
-        );
+        // Terminal::cleanup() should have already positioned the cursor and
+        // cleared the UI chrome.  This fallback just ensures the cursor is
+        // visible if we are dropping due to a panic or early return.
+        let _ = crossterm::execute!(std::io::stdout(), cursor::Show);
         let _ = terminal::disable_raw_mode();
     }
 }

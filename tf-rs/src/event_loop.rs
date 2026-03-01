@@ -646,6 +646,9 @@ impl EventLoop {
             }
         }
 
+        // Clear the status bar and input line before leaving raw mode so the
+        // shell prompt appears cleanly below the last line of session output.
+        self.terminal.cleanup();
         self.shutdown();
         Ok(())
     }
