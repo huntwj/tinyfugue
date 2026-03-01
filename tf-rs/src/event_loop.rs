@@ -1768,6 +1768,8 @@ impl EventLoop {
             };
 
             // Pad or truncate to the field's column width.
+            // C TF uses '_' as the background fill for the status bar, so empty
+            // portions of each field are padded with underscores, not spaces.
             let padded = match field.width {
                 Some(w) => {
                     let chars: Vec<char> = content.chars().collect();
@@ -1775,7 +1777,7 @@ impl EventLoop {
                         chars[..w].iter().collect()
                     } else {
                         let mut s: String = chars.iter().collect();
-                        while s.chars().count() < w { s.push(' '); }
+                        while s.chars().count() < w { s.push('_'); }
                         s
                     }
                 }
@@ -1805,8 +1807,11 @@ impl EventLoop {
 
     /// Render the screen, status bar, and input line, then flush.
     fn refresh_display(&mut self) {
-        self.update_status();
+        // sync_kb_globals must run before update_status so that the `insert`,
+        // `kbpoint`, etc. globals are current when build_status_text evaluates
+        // status field expressions (e.g. `insert ? "" : "(Over)"`).
         self.sync_kb_globals();
+        self.update_status();
         let scrollback = self.screen.scrollback();
         self.interp.set_global_var("moresize", crate::script::Value::Int(scrollback as i64));
         self.interp.set_global_var("columns",  crate::script::Value::Int(self.terminal.width as i64));
