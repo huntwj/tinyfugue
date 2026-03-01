@@ -549,8 +549,8 @@ impl EventLoop {
                                 // No output — just redraw the (possibly cleared)
                                 // input line so the user sees their typing.
                                 self.sync_kb_globals();
-                                let text = self.input.editor.text();
                                 let pos  = self.input.editor.pos;
+                                let text = self.input.editor.text();
                                 let _ = self.terminal.render_input(&text, pos);
                                 let _ = self.terminal.flush();
                             }
@@ -1741,11 +1741,11 @@ impl EventLoop {
     fn sync_kb_globals(&mut self) {
         use crate::script::Value;
         let pos = self.input.editor.pos;
-        let text = self.input.editor.text();
-        let (head, tail): (String, String) = {
-            let chars: Vec<char> = text.chars().collect();
-            (chars[..pos].iter().collect(), chars[pos..].iter().collect())
-        };
+        // Build head/tail directly from the char buffer — avoids allocating
+        // a full String representation just to re-split it.
+        let chars = self.input.editor.chars();
+        let head: String = chars[..pos].iter().collect();
+        let tail: String = chars[pos..].iter().collect();
         self.interp.set_global_var("kbpoint", Value::Int(pos as i64));
         self.interp.set_global_var("kbhead",  Value::Str(head));
         self.interp.set_global_var("kbtail",  Value::Str(tail));

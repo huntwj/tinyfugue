@@ -29,6 +29,10 @@ pub struct LineEditor {
     pub wordpunct: String,
     /// Last killed text, available for yanking.
     kill_ring: Vec<char>,
+    /// Cached UTF-8 representation of `buffer`.  Rebuilt lazily when `dirty`.
+    cached_text: String,
+    /// True when `buffer` has been modified since the last cache rebuild.
+    dirty: bool,
 }
 
 impl LineEditor {
@@ -39,14 +43,45 @@ impl LineEditor {
             insert_mode: true,
             wordpunct: String::new(),
             kill_ring: Vec::new(),
+            cached_text: String::new(),
+            dirty: false,
         }
     }
 
     // ── Buffer access ─────────────────────────────────────────────────────────
 
-    /// Current content as a `String`.
-    pub fn text(&self) -> String {
-        self.buffer.iter().collect()
+    /// Current content as a borrowed `&str`.
+    ///
+    /// The underlying `String` is rebuilt only when the buffer has changed
+    /// since the last call, making this allocation-free on repeat calls
+    /// between edits.  Takes `&mut self` to allow lazy cache rebuild.
+    pub fn text_ref(&mut self) -> &str {
+        if self.dirty {
+            self.cached_text.clear();
+            for &ch in &self.buffer {
+                self.cached_text.push(ch);
+            }
+            self.dirty = false;
+        }
+        &self.cached_text
+    }
+
+    /// Current content as an owned `String`.
+    ///
+    /// Prefers the cache; only allocates when the buffer has changed.
+    pub fn text(&mut self) -> String {
+        self.text_ref().to_owned()
+    }
+
+    /// Mark the cached text as stale.  Called after every buffer mutation.
+    #[inline]
+    fn mark_dirty(&mut self) {
+        self.dirty = true;
+    }
+
+    /// The buffer contents as a char slice (direct access, no allocation).
+    pub fn chars(&self) -> &[char] {
+        &self.buffer
     }
 
     /// Number of characters in the buffer.
@@ -60,9 +95,11 @@ impl LineEditor {
 
     /// Consume and return the buffer contents, resetting the editor to empty.
     pub fn take_line(&mut self) -> String {
-        let line = self.text();
+        let line = self.text_ref().to_owned();
         self.buffer.clear();
         self.pos = 0;
+        self.cached_text.clear();
+        self.dirty = false;
         line
     }
 
@@ -70,6 +107,7 @@ impl LineEditor {
     pub fn set_text(&mut self, text: &str) {
         self.buffer = text.chars().collect();
         self.pos = self.buffer.len();
+        self.mark_dirty();
     }
 
     // ── Insertion ─────────────────────────────────────────────────────────────
@@ -85,6 +123,7 @@ impl LineEditor {
             self.buffer[self.pos] = ch;
         }
         self.pos += 1;
+        self.mark_dirty();
     }
 
     /// Insert `s` at the cursor, advancing the cursor by `s.chars().count()`.
@@ -104,6 +143,7 @@ impl LineEditor {
         }
         self.pos -= 1;
         self.buffer.remove(self.pos);
+        self.mark_dirty();
         true
     }
 
@@ -114,6 +154,7 @@ impl LineEditor {
             return false;
         }
         self.buffer.remove(self.pos);
+        self.mark_dirty();
         true
     }
 
@@ -131,6 +172,7 @@ impl LineEditor {
         }
         self.buffer.drain(lo..hi);
         self.pos = self.pos.min(lo).min(self.buffer.len());
+        self.mark_dirty();
         true
     }
 
@@ -257,6 +299,7 @@ impl LineEditor {
     pub fn kill_to_end(&mut self) {
         self.kill_ring = self.buffer[self.pos..].to_vec();
         self.buffer.truncate(self.pos);
+        self.mark_dirty();
     }
 
     /// Kill (cut) from the start of the buffer to the cursor.
@@ -264,6 +307,7 @@ impl LineEditor {
         self.kill_ring = self.buffer[..self.pos].to_vec();
         self.buffer.drain(..self.pos);
         self.pos = 0;
+        self.mark_dirty();
     }
 
     /// Kill the word forward of the cursor.
@@ -271,6 +315,7 @@ impl LineEditor {
         let end = self.word_boundary(self.pos, 1);
         self.kill_ring = self.buffer[self.pos..end].to_vec();
         self.buffer.drain(self.pos..end);
+        self.mark_dirty();
     }
 
     /// Kill the word backward of the cursor.
@@ -279,6 +324,7 @@ impl LineEditor {
         self.kill_ring = self.buffer[start..self.pos].to_vec();
         self.buffer.drain(start..self.pos);
         self.pos = start;
+        self.mark_dirty();
     }
 
     /// Yank (paste) the kill ring contents at the cursor.
@@ -288,6 +334,7 @@ impl LineEditor {
             self.buffer.insert(self.pos, ch);
             self.pos += 1;
         }
+        self.mark_dirty();
     }
 
     /// Content of the kill ring.
