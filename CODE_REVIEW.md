@@ -37,7 +37,7 @@ in `Cargo.toml`). The file is automatically deleted on drop.
 
 ### H3 — `unwrap()` panic in `connect_world_by_name`
 **File:** `event_loop.rs` ~line 1297
-**Status:** [ ]
+**Status:** [x]
 
 ```rust
 let host = w.host.as_deref().unwrap();  // panics if host is None

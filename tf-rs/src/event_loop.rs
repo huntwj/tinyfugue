@@ -1288,13 +1288,12 @@ impl EventLoop {
             self.need_refresh = true;
             return;
         };
-        if !w.is_connectable() {
-            let msg = format!("% World '{}' has no host/port", w.name);
+        let Some(host) = w.host.as_deref() else {
+            let msg = format!("% World '{}' has no host", w.name);
             self.screen.push_line(LogicalLine::plain(&msg));
             self.need_refresh = true;
             return;
-        }
-        let host = w.host.as_deref().unwrap();
+        };
         let port: u16 = w.port.as_deref().unwrap_or("23").parse().unwrap_or(23);
         // Capture credentials before w is consumed by connect().
         let credentials = match (&w.character, &w.pass) {
