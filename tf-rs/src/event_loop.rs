@@ -1183,6 +1183,11 @@ impl EventLoop {
                 self.need_refresh = true;
             }
 
+            ScriptAction::LocalLine(msg) => {
+                self.screen.push_line(LogicalLine::plain(&msg));
+                self.need_refresh = true;
+            }
+
             ScriptAction::UndefMacrosMatching(pat) => {
                 // Bulk-remove macros whose name contains `pat` (substring match).
                 let names: Vec<String> = self.macro_store.iter()

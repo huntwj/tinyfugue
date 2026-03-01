@@ -110,6 +110,9 @@ pub enum ScriptAction {
     KillProcess(u32),
     /// Inject a line as if received from the server (`fake_recv([world,] line)`).
     FakeRecv { world: Option<String>, line: String },
+    /// Print a local diagnostic/info line to the TF screen (not sent to server,
+    /// not run through triggers).  Corresponds to C TF's `tf_wprintf`.
+    LocalLine(String),
     /// Remove all macros in the `MacroStore` whose name matches `pattern` (`/undefn pattern`).
     UndefMacrosMatching(String),
     /// Scroll the pager by `n` lines (negative = back, positive = forward) (`morescroll(n)`).
@@ -1381,8 +1384,13 @@ impl Interpreter {
                 Ok(None)
             }
 
-            // ── Unknown — silently ignore (like the C source) ──────────────────
-            _ => Ok(None),
+            // ── Unknown command ────────────────────────────────────────────────
+            _ => {
+                self.actions.push(ScriptAction::LocalLine(format!(
+                    "% Unknown command: /{name}"
+                )));
+                Ok(None)
+            }
         }
     }
 
