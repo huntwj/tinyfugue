@@ -52,6 +52,8 @@ pub enum NetEvent {
     Opt102(String),
     /// The server closed the connection.
     Closed,
+    /// MCCP decompression failed; the connection should be dropped.
+    McccpError(String),
 }
 
 // ── Protocol (pure, testable) ─────────────────────────────────────────────
@@ -94,7 +96,13 @@ impl Protocol {
         let telnet_input: Vec<u8> = if let Some(ref mut decomp) = self.mccp {
             match mccp_decompress(decomp, raw, &mut self.decomp_scratch) {
                 Ok(v) => v,
-                Err(_) => raw.to_vec(), // fall back on decompression failure
+                Err(e) => {
+                    // Decompression failure: discard the decompressor to prevent
+                    // feeding garbage bytes to the telnet parser, and signal an
+                    // error so the caller can disconnect and report to the user.
+                    self.mccp = None;
+                    return (vec![NetEvent::McccpError(e.to_string())], Vec::new());
+                }
             }
         } else {
             raw.to_vec()

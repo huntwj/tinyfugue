@@ -124,7 +124,7 @@ fn make_seed() -> u64 {
 
 ### H7 — Silent MCCP decompression failure feeds garbage to telnet parser
 **File:** `net.rs` (`mccp_decompress` / `Protocol::process`)
-**Status:** [ ]
+**Status:** [x]
 
 When `flate2` decompression fails, the code silently falls back to treating the compressed
 bytes as raw telnet input. The telnet parser then processes garbage bytes, producing

@@ -1414,6 +1414,19 @@ impl EventLoop {
                 self.update_status();
                 self.need_refresh = true;
             }
+            NetEvent::McccpError(err) => {
+                let notice = format!("** MCCP decompression error on {}: {err} — disconnecting **", msg.world);
+                self.screen.push_line(LogicalLine::plain(&notice));
+                // Drop the connection handle so the task is stopped.
+                self.handles.remove(&msg.world);
+                let was_active = self.active_world.as_deref() == Some(&msg.world);
+                if was_active {
+                    self.active_world = self.handles.keys().next().cloned();
+                }
+                self.fire_hook(Hook::Disconnect, &msg.world).await;
+                self.update_status();
+                self.need_refresh = true;
+            }
         }
     }
 
