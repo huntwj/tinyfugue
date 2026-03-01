@@ -95,6 +95,8 @@ pub enum Token {
     Comma,
     LParen,
     RParen,
+    /// Unrecognised input byte — reported as a diagnostic instead of masking as EOF.
+    Unknown(char),
     Eof,
 }
 
@@ -325,7 +327,7 @@ impl<'a> Lexer<'a> {
             b',' => Token::Comma,
             b'(' => Token::LParen,
             b')' => Token::RParen,
-            _ => Token::Eof,
+            c => Token::Unknown(c as char),
         }
     }
 
@@ -333,7 +335,7 @@ impl<'a> Lexer<'a> {
         let mut tokens = Vec::new();
         loop {
             let t = self.next_token();
-            let done = t == Token::Eof;
+            let done = matches!(t, Token::Eof);
             tokens.push(t);
             if done {
                 break;

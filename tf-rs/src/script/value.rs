@@ -99,11 +99,7 @@ impl Value {
     }
 
     pub fn arith_add(&self, rhs: &Value) -> Value {
-        // String concatenation if either operand is a non-numeric string.
-        if let (Value::Str(a), _) | (_, Value::Str(a)) = (self, rhs) {
-            let _ = a; // borrow check trick — check both
-        }
-        // Try numeric first
+        // C TF `+` is always numeric; non-numeric strings coerce to 0.
         let (a, b, is_float) = Self::numeric_promote(self, rhs);
         Self::make_numeric(a + b, is_float)
     }

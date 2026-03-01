@@ -220,7 +220,7 @@ of dropped logical lines in a single second pass.
 
 ### M4 — `arith_add` misleading comment in `value.rs`
 **File:** `script/value.rs` `arith_add` ~lines 101–109
-**Status:** [ ]
+**Status:** [x]
 
 The comment says `+` performs string concatenation when either operand is non-numeric,
 but the implementation always promotes both operands to numbers. Non-numeric strings
@@ -233,7 +233,7 @@ the intent (verify against C TF behaviour: C TF `+` is always numeric).
 
 ### M5 — Unknown token produces `Token::Eof` instead of a diagnostic
 **File:** `script/expr.rs` lexer `_` arm ~line 327
-**Status:** [ ]
+**Status:** [x]
 
 Unrecognised input bytes fall through to `Token::Eof`, giving "unexpected EOF" parse
 errors instead of "unexpected character 'X'".
