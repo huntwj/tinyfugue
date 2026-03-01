@@ -394,7 +394,7 @@ match/comparison sites.
 
 ### L9 — `tfstr.rs`: `to_lowercase()` allocates on every `@{...}` parse
 **File:** `tfstr.rs` `tf_color_index`
-**Status:** [ ]
+**Status:** [x]
 
 `name.to_lowercase()` allocates a `String` on every call. This runs in the hot path
 when parsing ANSI/attribute sequences from incoming server lines.
@@ -405,7 +405,7 @@ when parsing ANSI/attribute sequences from incoming server lines.
 
 ### L10 — `world.rs`: `to_addworld` emits `-s host` as a single token
 **File:** `world.rs` `to_addworld`
-**Status:** [ ]
+**Status:** [x]
 
 `parts.push(format!("-s {h}"))` emits `-s hostname` as one token. This works for
 human-readable output but is inconsistent with how other flag/value pairs are pushed
@@ -417,7 +417,7 @@ and could confuse any future re-parser of the output.
 
 ### L11 — `pattern.rs`: `Clone` re-compiles regex and can panic
 **File:** `pattern.rs` `Pattern::clone`
-**Status:** [ ]
+**Status:** [x]
 
 `Pattern::clone` calls `Pattern::new(...).expect("pattern recompile failed")`. If the
 regex library ever rejects a previously-accepted pattern, `clone` panics — violating

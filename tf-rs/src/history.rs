@@ -155,7 +155,10 @@ impl InputHistory {
                 let steps = n.unsigned_abs() as usize;
 
                 if n > 0 {
-                    // Search older.
+                    // Search older (toward higher indices = further back in time).
+                    // Invariant: `pos == start` after the loop means no match was
+                    // found — the loop never updated `pos`.  This is the termination
+                    // condition because `pos` is only written when a match is found.
                     let mut found = 0usize;
                     let mut pos = start;
                     for i in start..self.entries.len() {
@@ -168,11 +171,14 @@ impl InputHistory {
                         }
                     }
                     if pos == start {
-                        return None; // no more matches
+                        return None; // no more matches toward older entries
                     }
                     self.recall_pos = pos;
                 } else {
-                    // Search newer.
+                    // Search newer (toward lower indices = closer to live line).
+                    // Invariant: `pos == start` after the loop means no match was
+                    // found in the newer direction.  In that case we return the live
+                    // (saved) line and reset recall_pos to 0 (sentinel for live line).
                     if start == 0 {
                         return None;
                     }
@@ -188,7 +194,7 @@ impl InputHistory {
                         }
                     }
                     if pos == start {
-                        // Fell back to live line.
+                        // No prefix match toward newer entries — fall back to live line.
                         self.recall_pos = 0;
                         return Some(&self.saved_line);
                     }

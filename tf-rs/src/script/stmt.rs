@@ -149,6 +149,13 @@ fn split_by_separator(line: &str) -> Vec<String> {
 
 /// Returns `true` if the logical line is a command whose body (after `=`) must
 /// not be split on `%;`.  These are macro-defining commands.
+///
+/// # Abbreviations
+///
+/// Only the full command names are checked here.  The TF scripting parser does
+/// **not** support abbreviated commands (e.g. `/d` for `/def`) inside compound
+/// statements, so no abbreviation expansion is needed.  If abbreviated forms are
+/// ever added to the interpreter, this function must be updated in sync.
 fn is_body_cmd(line: &str) -> bool {
     let s = line.trim_start();
     if !s.starts_with('/') {

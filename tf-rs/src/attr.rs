@@ -23,7 +23,24 @@ impl Attr {
     pub const ITALIC: Self    = Self(0x0008);
     /// Highlight: a user-visible emphasis that doesn't map to a specific style.
     pub const HILITE: Self    = Self(0x0010);
-    /// Explicitly marks "no attributes" (distinct from the zero value).
+    /// Explicitly marks "no attributes" (distinct from the zero value [`EMPTY`]).
+    ///
+    /// # Sentinel semantics
+    ///
+    /// [`EMPTY`] (`Attr(0)`) is the natural zero value produced by `Default` or
+    /// bitwise operations on no flags.  `NONE` is a *positive* marker — bit 5 set
+    /// — used in C TF when an attribute field must explicitly communicate "no
+    /// formatting" rather than "unspecified".
+    ///
+    /// Concretely: `attr.contains(Attr::NONE)` returns `false` for an `EMPTY`
+    /// attr, because `NONE` has bit 5 set and `EMPTY` has no bits set.  Only
+    /// values that were explicitly created with `NONE` pass `contains(NONE)`.
+    ///
+    /// Use [`EMPTY`] / [`is_empty`] for "nothing set"; use `NONE` only when you
+    /// need to distinguish "explicitly no-attrs" from "unset" in the same field.
+    ///
+    /// [`EMPTY`]: Self::EMPTY
+    /// [`is_empty`]: Self::is_empty
     pub const NONE: Self      = Self(0x0020);
     pub const EXCLUSIVE: Self = Self(0x0040);
 
