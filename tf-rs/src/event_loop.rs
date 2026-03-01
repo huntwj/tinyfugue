@@ -30,7 +30,6 @@ use std::time::{Duration, Instant};
 
 use libc;
 
-use tokio::io::AsyncReadExt;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::mpsc;
 use tokio::time::sleep_until;
@@ -490,8 +489,35 @@ impl EventLoop {
         // Initial full-screen paint.
         self.refresh_display();
 
-        let mut stdin = tokio::io::stdin();
-        let mut stdin_buf = [0u8; 256];
+        // Spawn a dedicated stdin-reading thread.
+        //
+        // tokio::io::stdin() uses spawn_blocking under the hood.  When
+        // select! drops the future (to handle another branch), the blocking
+        // thread is orphaned but still running — on the next iteration a new
+        // thread is spawned, so eventually many threads compete to read the
+        // same stdin fd, causing lost keystrokes.  A dedicated thread that
+        // owns stdin and sends data through an mpsc channel avoids this.
+        let (stdin_tx, mut stdin_rx) = mpsc::channel::<Vec<u8>>(16);
+        std::thread::spawn(move || {
+            use std::io::Read;
+            let stdin = std::io::stdin();
+            let mut guard = stdin.lock();
+            let mut buf = [0u8; 256];
+            loop {
+                match guard.read(&mut buf) {
+                    Ok(0) | Err(_) => {
+                        // EOF or error — send an empty vec as sentinel.
+                        let _ = stdin_tx.blocking_send(vec![]);
+                        break;
+                    }
+                    Ok(n) => {
+                        if stdin_tx.blocking_send(buf[..n].to_vec()).is_err() {
+                            break; // receiver dropped (event loop exited)
+                        }
+                    }
+                }
+            }
+        });
 
         while !self.quit {
             // ── Compute the next timer deadline ──────────────────────────
@@ -512,48 +538,48 @@ impl EventLoop {
 
             // ── Select ───────────────────────────────────────────────────
             tokio::select! {
-                // Keyboard input.
-                result = stdin.read(&mut stdin_buf) => {
-                    match result {
-                        Ok(0) | Err(_) => self.quit = true,
-                        Ok(n) => {
-                            self.last_keystroke = Instant::now();
-                            for &b in &stdin_buf[..n] {
-                                if let Some(action) = self.key_decoder.push(b) {
-                                    // Intercept scrollback ops before the editor.
-                                    match &action {
-                                        EditAction::Bound(KeyBinding::DoKey(DoKeyOp::ScrollUp)) => {
-                                            let page = self.terminal.output_bottom() as usize;
-                                            self.screen.scroll_up(page);
-                                            self.need_refresh = true;
-                                        }
-                                        EditAction::Bound(KeyBinding::DoKey(DoKeyOp::ScrollDown)) => {
-                                            let page = self.terminal.output_bottom() as usize;
-                                            self.screen.scroll_down(page);
-                                            self.need_refresh = true;
-                                        }
-                                        _ => {
-                                            if let Some(line) = self.input.apply(action) {
-                                                self.dispatch_line(line).await;
-                                            }
+                // Keyboard input (from dedicated stdin-reading thread).
+                Some(bytes) = stdin_rx.recv() => {
+                    if bytes.is_empty() {
+                        // EOF or error sentinel from the stdin thread.
+                        self.quit = true;
+                    } else {
+                        self.last_keystroke = Instant::now();
+                        for b in bytes {
+                            if let Some(action) = self.key_decoder.push(b) {
+                                // Intercept scrollback ops before the editor.
+                                match &action {
+                                    EditAction::Bound(KeyBinding::DoKey(DoKeyOp::ScrollUp)) => {
+                                        let page = self.terminal.output_bottom() as usize;
+                                        self.screen.scroll_up(page);
+                                        self.need_refresh = true;
+                                    }
+                                    EditAction::Bound(KeyBinding::DoKey(DoKeyOp::ScrollDown)) => {
+                                        let page = self.terminal.output_bottom() as usize;
+                                        self.screen.scroll_down(page);
+                                        self.need_refresh = true;
+                                    }
+                                    _ => {
+                                        if let Some(line) = self.input.apply(action) {
+                                            self.dispatch_line(line).await;
                                         }
                                     }
                                 }
                             }
-                            // If the command produced output, do a full refresh
-                            // immediately rather than waiting for the timer tick.
-                            if self.need_refresh {
-                                self.refresh_display();
-                                self.need_refresh = false;
-                            } else {
-                                // No output — just redraw the (possibly cleared)
-                                // input line so the user sees their typing.
-                                self.sync_kb_globals();
-                                let pos  = self.input.editor.pos;
-                                let text = self.input.editor.text();
-                                let _ = self.terminal.render_input(&text, pos);
-                                let _ = self.terminal.flush();
-                            }
+                        }
+                        // If the command produced output, do a full refresh
+                        // immediately rather than waiting for the timer tick.
+                        if self.need_refresh {
+                            self.refresh_display();
+                            self.need_refresh = false;
+                        } else {
+                            // No output — just redraw the (possibly cleared)
+                            // input line so the user sees their typing.
+                            self.sync_kb_globals();
+                            let pos  = self.input.editor.pos;
+                            let text = self.input.editor.text();
+                            let _ = self.terminal.render_input(&text, pos);
+                            let _ = self.terminal.flush();
                         }
                     }
                 }
@@ -1802,7 +1828,7 @@ mod tests {
     use super::*;
     use crate::keybind::{DoKeyOp, KeyBinding};
     use std::time::Duration;
-    use tokio::io::AsyncWriteExt;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
     #[test]
