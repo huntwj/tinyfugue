@@ -223,6 +223,29 @@ struct Frame {
     cmd_name: String,
 }
 
+// ── CachedMacro ───────────────────────────────────────────────────────────────
+
+/// A user-defined macro whose body is parsed lazily on first invocation and
+/// cached thereafter, avoiding O(body_len) work on every trigger fire.
+struct CachedMacro {
+    body: String,
+    parsed: Option<Vec<Stmt>>,
+}
+
+impl CachedMacro {
+    fn new(body: String) -> Self {
+        Self { body, parsed: None }
+    }
+
+    /// Return the parsed statement list, compiling on first call.
+    fn stmts(&mut self) -> Result<&[Stmt], String> {
+        if self.parsed.is_none() {
+            self.parsed = Some(parse_script(&self.body)?);
+        }
+        Ok(self.parsed.as_deref().unwrap())
+    }
+}
+
 // ── Interpreter ───────────────────────────────────────────────────────────────
 
 /// The TF script interpreter.
@@ -231,8 +254,8 @@ pub struct Interpreter {
     globals: HashMap<String, Value>,
     /// Local variable stack (innermost frame last).
     frames: Vec<Frame>,
-    /// User-defined macros: name → script source.
-    macros: HashMap<String, String>,
+    /// User-defined macros: name → body + parse cache.
+    macros: HashMap<String, CachedMacro>,
     /// Lines of output produced by `/echo`.
     pub output: Vec<String>,
     /// Side-effects queued for the event loop.
@@ -277,7 +300,7 @@ impl Interpreter {
 
     /// Define a user macro (name → TF script source).
     pub fn define_macro(&mut self, name: impl Into<String>, body: impl Into<String>) {
-        self.macros.insert(name.into(), body.into());
+        self.macros.insert(name.into(), CachedMacro::new(body.into()));
     }
 
     /// Remove a user macro by name.  Returns `true` if it existed.
@@ -450,12 +473,17 @@ impl Interpreter {
 
             Stmt::Command { name, args } => {
                 // Try user-defined macro first.
-                let src = self.macros.get(name.as_str()).cloned();
-                if let Some(body) = src {
+                if self.macros.contains_key(name.as_str()) {
+                    let stmts = self
+                        .macros
+                        .get_mut(name.as_str())
+                        .unwrap()
+                        .stmts()?
+                        .to_vec();
                     let expanded_args = expand(args, self)?;
                     let params: Vec<String> =
                         expanded_args.split_whitespace().map(str::to_owned).collect();
-                    return self.invoke_macro(&body, name, params);
+                    return self.invoke_macro(stmts, name, params);
                 }
 
                 // Built-in command dispatch.
@@ -502,7 +530,7 @@ impl Interpreter {
                 let mac = parse_def(args);
                 if let Some(name) = &mac.name {
                     if let Some(body) = &mac.body {
-                        self.macros.insert(name.clone(), body.clone());
+                        self.macros.insert(name.clone(), CachedMacro::new(body.clone()));
                     }
                 }
                 self.actions.push(ScriptAction::DefMacro(mac));
@@ -1394,10 +1422,10 @@ impl Interpreter {
         }
     }
 
-    /// Invoke a macro body with positional parameters.
+    /// Invoke a macro body (already parsed) with positional parameters.
     fn invoke_macro(
         &mut self,
-        body: &str,
+        stmts: Vec<Stmt>,
         name: &str,
         params: Vec<String>,
     ) -> Result<Option<ControlFlow>, String> {
@@ -1406,7 +1434,6 @@ impl Interpreter {
             params,
             cmd_name: name.to_owned(),
         });
-        let stmts = parse_script(body)?;
         let result = self.exec_block(&stmts);
         self.frames.pop();
         result
@@ -1794,10 +1821,10 @@ impl EvalContext for Interpreter {
         if let Some(result) = call_builtin(name, args.clone()) {
             return result;
         }
-        let src = self.macros.get(name).cloned();
-        if let Some(body) = src {
+        if self.macros.contains_key(name) {
+            let stmts = self.macros.get_mut(name).unwrap().stmts()?.to_vec();
             let params: Vec<String> = args.iter().map(|v| v.to_string()).collect();
-            self.invoke_macro(&body, name, params)?;
+            self.invoke_macro(stmts, name, params)?;
             return Ok(Value::default());
         }
         // Unknown functions return empty string, matching TF's C behaviour.

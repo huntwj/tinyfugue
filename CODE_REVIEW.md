@@ -154,7 +154,7 @@ state_arc.and_then(|s| s.active_world.lock().unwrap().clone())
 
 ### H9 — Macro body re-parsed on every invocation
 **File:** `script/interp.rs` `invoke_macro` ~line 1401
-**Status:** [ ]
+**Status:** [x]
 
 `parse_script(body)` is called every time a macro fires. For a trigger that matches
 every incoming server line (common in active MUD sessions), this is `O(body_len)` parse
