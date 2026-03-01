@@ -176,33 +176,39 @@ fn tf_apply_spec(spec: &str, cur: Attr) -> Attr {
 }
 
 fn tf_color_index(name: &str) -> Option<u8> {
-    match name.to_lowercase().as_str() {
-        "black"                                      => Some(0),
-        "red"                                        => Some(1),
-        "green"                                      => Some(2),
-        "yellow"                                     => Some(3),
-        "blue"                                       => Some(4),
-        "magenta"                                    => Some(5),
-        "cyan"                                       => Some(6),
-        "white"                                      => Some(7),
-        "gray" | "grey" | "darkgray" | "brightblack" => Some(8),
-        "brightred"                                  => Some(9),
-        "brightgreen"                                => Some(10),
-        "brightyellow"                               => Some(11),
-        "brightblue"                                 => Some(12),
-        "brightmagenta"                              => Some(13),
-        "brightcyan"                                 => Some(14),
-        "brightwhite"                                => Some(15),
-        s if s.starts_with("rgb") && s.len() == 6 => {
-            let mut digits = [0u8; 3];
-            for (i, b) in s[3..].bytes().enumerate() {
-                if i >= 3 || !(b'0'..=b'5').contains(&b) { return None; }
-                digits[i] = b - b'0';
-            }
-            Some(tf_rgb_to_16(digits[0], digits[1], digits[2]))
+    let eq = |s: &str| name.eq_ignore_ascii_case(s);
+    if eq("black")        { return Some(0); }
+    if eq("red")          { return Some(1); }
+    if eq("green")        { return Some(2); }
+    if eq("yellow")       { return Some(3); }
+    if eq("blue")         { return Some(4); }
+    if eq("magenta")      { return Some(5); }
+    if eq("cyan")         { return Some(6); }
+    if eq("white")        { return Some(7); }
+    if eq("gray") || eq("grey") || eq("darkgray") || eq("brightblack") { return Some(8); }
+    if eq("brightred")    { return Some(9); }
+    if eq("brightgreen")  { return Some(10); }
+    if eq("brightyellow") { return Some(11); }
+    if eq("brightblue")   { return Some(12); }
+    if eq("brightmagenta"){ return Some(13); }
+    if eq("brightcyan")   { return Some(14); }
+    if eq("brightwhite")  { return Some(15); }
+    // rgbXYZ — X,Y,Z each 0-5 (6-char case-insensitive prefix "rgb" + 3 digits)
+    let lower: [u8; 6] = {
+        let b = name.as_bytes();
+        if b.len() != 6 { return None; }
+        [b[0].to_ascii_lowercase(), b[1].to_ascii_lowercase(), b[2].to_ascii_lowercase(),
+         b[3], b[4], b[5]]
+    };
+    if &lower[..3] == b"rgb" {
+        let mut digits = [0u8; 3];
+        for (i, &byte) in lower[3..].iter().enumerate() {
+            if !(b'0'..=b'5').contains(&byte) { return None; }
+            digits[i] = byte - b'0';
         }
-        _ => None,
+        return Some(tf_rgb_to_16(digits[0], digits[1], digits[2]));
     }
+    None
 }
 
 /// Map an `rgbXYZ` colour (X, Y, Z each 0–5) to the nearest 16-colour index.

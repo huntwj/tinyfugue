@@ -13,6 +13,8 @@
 //! | [`MatchMode::Simple`] | `MATCH_SIMPLE` | Case-insensitive exact match |
 //! | [`MatchMode::Substr`] | `MATCH_SUBSTR` | Case-insensitive substring search |
 
+use std::sync::Arc;
+
 use aho_corasick::{AhoCorasick, AhoCorasickBuilder};
 use regex::Regex;
 
@@ -46,14 +48,17 @@ impl std::fmt::Display for PatternError {
 impl std::error::Error for PatternError {}
 
 // Compiled form — kept private; callers use Pattern's methods.
+// Arc wrappers make Clone a cheap reference-count increment instead of a recompile.
+#[derive(Clone)]
 enum Compiled {
-    Regex(Regex),
+    Regex(Arc<Regex>),
     Glob,
     Simple(String),
-    Substr(Box<AhoCorasick>),
+    Substr(Arc<AhoCorasick>),
 }
 
 /// A compiled pattern ready for matching.
+#[derive(Clone)]
 pub struct Pattern {
     src: String,
     mode: MatchMode,
@@ -69,21 +74,13 @@ impl std::fmt::Debug for Pattern {
     }
 }
 
-impl Clone for Pattern {
-    /// Recompile from source.  Panics only if the original was valid but
-    /// recompilation somehow fails (shouldn't happen in practice).
-    fn clone(&self) -> Self {
-        Pattern::new(&self.src, self.mode).expect("Pattern::clone: recompile failed")
-    }
-}
-
 impl Pattern {
     /// Compile `src` using `mode`.
     ///
     /// Returns [`PatternError`] if the pattern is syntactically invalid.
     pub fn new(src: &str, mode: MatchMode) -> Result<Self, PatternError> {
         let compiled = match mode {
-            MatchMode::Regexp => Compiled::Regex(compile_regex(src)?),
+            MatchMode::Regexp => Compiled::Regex(Arc::new(compile_regex(src)?)),
             MatchMode::Glob => {
                 check_glob(src).map_err(PatternError::InvalidGlob)?;
                 Compiled::Glob
@@ -93,7 +90,7 @@ impl Pattern {
                 let ac = AhoCorasickBuilder::new()
                     .ascii_case_insensitive(true)
                     .build([src]);
-                Compiled::Substr(Box::new(ac))
+                Compiled::Substr(Arc::new(ac))
             }
         };
         Ok(Self {

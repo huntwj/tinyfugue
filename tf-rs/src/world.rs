@@ -73,7 +73,8 @@ impl World {
             parts.push(format!("-T{t}"));
         }
         if let Some(h) = &self.myhost {
-            parts.push(format!("-s {h}"));
+            parts.push("-s".to_owned());
+            parts.push(h.clone());
         }
         if self.flags.echo    { parts.push("-e".to_owned()); }
         if self.flags.ssl     { parts.push("-x".to_owned()); }
