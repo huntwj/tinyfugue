@@ -1267,13 +1267,24 @@ impl EventLoop {
     /// An empty name means the default world.
     pub async fn connect_world_by_name(&mut self, name: &str) {
         let world = if name.is_empty() {
+            // Auto-connect: try the world named "default" first, then fall
+            // back to the first defined world (mirrors C TF socket.c behaviour).
             self.worlds.default_world().cloned()
+                .or_else(|| self.worlds.iter().next().cloned())
         } else {
             self.worlds.find(name).cloned()
         };
         let Some(w) = world else {
-            let msg = format!("% Unknown world '{name}'");
-            self.screen.push_line(LogicalLine::plain(&msg));
+            if name.is_empty() {
+                // No worlds defined at all: mirrors C TF's "---- No world ----"
+                // + H_WORLD hook when there is nothing to connect to.
+                let msg = "---- No world ----";
+                self.screen.push_line(LogicalLine::plain(msg));
+                self.fire_hook(Hook::World, msg).await;
+            } else {
+                let msg = format!("% Unknown world '{name}'");
+                self.screen.push_line(LogicalLine::plain(&msg));
+            }
             self.need_refresh = true;
             return;
         };

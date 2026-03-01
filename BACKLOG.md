@@ -280,3 +280,7 @@ Most can be stubbed as reasonable defaults.
 - [x] [C5] `/edit` — opens input buffer in `$EDITOR` (or `$VISUAL`/`vi` fallback),
   writes to a temp file, re-inserts result on exit; mirrors C TF's handle_edit_command
 - [x] [C6] `/liststreams` — lists `self.tf_files` by fd and mode (r/w/a)
+- [x] [S3] `-l` no autologin / `-q` quiet login — `Hook::Login` fires after connect with
+  `"world character password"` when `!no_autologin` and world has credentials; `no_autologin`
+  and `quiet_login` fields on `EventLoop` threaded from CLI args; `parse_def` hargs bug fixed
+  (was consuming macro name as hargs pattern — now parsed from `/pattern` suffix in spec only)
