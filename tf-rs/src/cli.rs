@@ -29,6 +29,9 @@ pub struct CliArgs {
     pub debug: bool,
     /// What to connect to on startup.
     pub connect: ConnectTarget,
+    /// `--install-libs [<dir>]`: extract embedded lib files and exit.
+    /// `Some(None)` = use OS default data dir; `Some(Some(p))` = explicit dir.
+    pub install_libs: Option<Option<PathBuf>>,
 }
 
 /// How to choose the user config file.
@@ -55,6 +58,25 @@ pub enum ConnectTarget {
     HostPort(String, u16),
 }
 
+/// Where to load library files from.
+pub enum LibSource {
+    /// Load from this directory on disk (explicit or auto-detected).
+    Path(PathBuf),
+    /// No usable directory found on disk; use embedded files.
+    /// The inner `PathBuf` is the OS data dir that `--install-libs` would write to,
+    /// used as the `%TFLIBDIR` hint so that user-installed overrides are found there.
+    Embedded(PathBuf),
+}
+
+impl LibSource {
+    /// The path reported as `%TFLIBDIR` inside TF.
+    pub fn as_path(&self) -> &PathBuf {
+        match self {
+            LibSource::Path(p) | LibSource::Embedded(p) => p,
+        }
+    }
+}
+
 // ── Parsing ───────────────────────────────────────────────────────────────────
 
 /// Parse `std::env::args()` and return [`CliArgs`] or an error message.
@@ -77,6 +99,25 @@ pub fn parse_argv(argv: &[String]) -> Result<CliArgs, String> {
             i += 1;
             positional.extend(argv[i..].iter().cloned());
             break;
+        }
+
+        // Long options (`--foo` or `--foo <val>`).
+        if arg.starts_with("--") {
+            match arg {
+                "--install-libs" => {
+                    let dir = argv
+                        .get(i + 1)
+                        .filter(|a| !a.starts_with('-'))
+                        .map(|a| {
+                            i += 1;
+                            PathBuf::from(a)
+                        });
+                    args.install_libs = Some(dir);
+                }
+                other => return Err(format!("illegal option -- -{}", &other[2..])),
+            }
+            i += 1;
+            continue;
         }
 
         // Non-flag argument.
@@ -189,28 +230,84 @@ pub fn find_user_config() -> Option<PathBuf> {
     .find(|p| p.exists())
 }
 
-/// Determine the TF library directory.
+/// Return the OS-appropriate user data directory for TF library files.
 ///
-/// Priority: `-L<dir>` CLI flag → `TFLIBDIR` env var → path relative to the
-/// binary (development/installed layout) → `/usr/local/lib/tf`.
-pub fn resolve_libdir(cli_override: Option<&PathBuf>) -> PathBuf {
+/// - Linux:   `~/.local/share/tf`
+/// - macOS:   `~/Library/Application Support/tf`
+/// - Windows: `%APPDATA%\tf`
+///
+/// Falls back to `~/.local/share/tf` if the `directories` crate cannot
+/// determine the platform data dir.
+pub fn default_user_tf_dir() -> PathBuf {
+    use directories::ProjectDirs;
+    ProjectDirs::from("", "", "tf")
+        .map(|d| d.data_dir().to_path_buf())
+        .unwrap_or_else(|| {
+            let home = std::env::var("HOME").unwrap_or_default();
+            PathBuf::from(format!("{home}/.local/share/tf"))
+        })
+}
+
+/// Determine where to load library files from.
+///
+/// Priority:
+/// 1. `-L<dir>` CLI flag — use that dir on disk
+/// 2. `$TFLIBDIR` env var — use that dir on disk
+/// 3. `CARGO_MANIFEST_DIR/../lib/tf` — repo lib dir (dev builds via `cargo run`)
+/// 4. OS user data dir (`~/.local/share/tf` on Linux) — if `stdlib.tf` is present
+/// 5. Embedded — use files baked into the binary
+pub fn resolve_libdir(cli_override: Option<&PathBuf>) -> LibSource {
+    // 1. Explicit -L flag.
     if let Some(d) = cli_override {
-        return d.clone();
+        return LibSource::Path(d.clone());
     }
+
+    // 2. TFLIBDIR env var.
     if let Ok(d) = std::env::var("TFLIBDIR") {
-        return PathBuf::from(d);
+        return LibSource::Path(PathBuf::from(d));
     }
-    // During development, look alongside the workspace root.
+
+    // 3. Development: repo's lib/tf alongside the workspace root.
     if let Ok(manifest) = std::env::var("CARGO_MANIFEST_DIR") {
         let dev = PathBuf::from(&manifest)
             .parent()
             .unwrap_or(std::path::Path::new("."))
             .join("lib/tf");
         if dev.exists() {
-            return dev;
+            return LibSource::Path(dev);
         }
     }
-    PathBuf::from("/usr/local/lib/tf")
+
+    // 4. OS user data dir — only if stdlib.tf is actually installed there.
+    let user_dir = default_user_tf_dir();
+    if user_dir.join("stdlib.tf").exists() {
+        return LibSource::Path(user_dir);
+    }
+
+    // 5. Fall back to embedded files; report the user data dir as %TFLIBDIR so
+    //    that files placed there by `--install-libs` are picked up automatically.
+    LibSource::Embedded(user_dir)
+}
+
+/// Write all embedded lib files to `dest`, creating the directory if needed.
+///
+/// Existing files are skipped (preserves user customisations).
+/// Returns the number of files newly written.
+pub fn install_embedded_libs(dest: &PathBuf) -> Result<usize, String> {
+    std::fs::create_dir_all(dest)
+        .map_err(|e| format!("cannot create {}: {e}", dest.display()))?;
+
+    let mut count = 0;
+    for (name, content) in crate::embedded::all_embedded() {
+        let path = dest.join(name);
+        if path.exists() {
+            continue; // preserve customisation
+        }
+        std::fs::write(&path, content)
+            .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+        count += 1;
+    }
+    Ok(count)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -304,5 +401,45 @@ mod tests {
     #[test]
     fn unknown_flag() {
         assert!(parse_argv(&argv(&["-z"])).is_err());
+    }
+
+    #[test]
+    fn install_libs_no_dir() {
+        let a = parse_argv(&argv(&["--install-libs"])).unwrap();
+        assert!(matches!(a.install_libs, Some(None)));
+    }
+
+    #[test]
+    fn install_libs_with_dir() {
+        let a = parse_argv(&argv(&["--install-libs", "/tmp/mylibs"])).unwrap();
+        assert!(
+            matches!(&a.install_libs, Some(Some(p)) if p == &PathBuf::from("/tmp/mylibs"))
+        );
+    }
+
+    #[test]
+    fn install_libs_embedded_get() {
+        // stdlib.tf must always be present in the embedded registry.
+        let src = crate::embedded::get_embedded("stdlib.tf");
+        assert!(src.is_some());
+        assert!(src.unwrap().contains("/def"));
+    }
+
+    #[test]
+    fn install_libs_writes_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let count = install_embedded_libs(&dir.path().to_path_buf()).unwrap();
+        assert!(count > 0);
+        assert!(dir.path().join("stdlib.tf").exists());
+    }
+
+    #[test]
+    fn install_libs_skips_existing() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("stdlib.tf"), b"custom").unwrap();
+        install_embedded_libs(&dir.path().to_path_buf()).unwrap();
+        // Custom file should not be overwritten.
+        let content = std::fs::read(dir.path().join("stdlib.tf")).unwrap();
+        assert_eq!(content, b"custom");
     }
 }

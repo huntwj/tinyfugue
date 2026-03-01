@@ -197,8 +197,18 @@ fn make_file_loader() -> FileLoader {
     use std::sync::Arc;
     Arc::new(|path: &str| {
         let resolved = expand_tilde(path);
-        std::fs::read_to_string(&resolved)
-            .map_err(|e| format!("{resolved}: {e}"))
+        // Try filesystem first (covers both explicit paths and user-installed overrides).
+        if let Ok(src) = std::fs::read_to_string(&resolved) {
+            return Ok(src);
+        }
+        // Fall back to embedded registry by basename.
+        let name = std::path::Path::new(&resolved)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(path);
+        crate::embedded::get_embedded(name)
+            .map(|s| s.to_owned())
+            .ok_or_else(|| format!("{resolved}: not found"))
     })
 }
 
@@ -398,9 +408,14 @@ impl EventLoop {
     pub fn load_script_file(&mut self, path: &std::path::Path) -> Result<(), String> {
         let src = std::fs::read_to_string(path)
             .map_err(|e| format!("{}: {e}", path.display()))?;
+        self.load_script_source(&src, &path.display().to_string())
+    }
+
+    /// Execute a TF script given its source directly (e.g. from embedded files).
+    pub fn load_script_source(&mut self, src: &str, label: &str) -> Result<(), String> {
         self.interp
-            .exec_script(&src)
-            .map_err(|e| format!("{}: {e}", path.display()))?;
+            .exec_script(src)
+            .map_err(|e| format!("{label}: {e}"))?;
         // Drain output — print to stdout (terminal not in raw mode yet).
         for line in self.interp.output.drain(..) {
             println!("{line}");

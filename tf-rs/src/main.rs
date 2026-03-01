@@ -1,4 +1,4 @@
-use tf::cli::{self, ConfigFile, ConnectTarget};
+use tf::cli::{self, ConfigFile, ConnectTarget, LibSource};
 use tf::event_loop::EventLoop;
 use tf::hook::Hook;
 use tf::script::builtins::tf_features_string;
@@ -39,6 +39,20 @@ async fn main() {
         }
     };
 
+    // ── --install-libs: extract embedded files and exit ───────────────────────
+    if let Some(dest) = args.install_libs {
+        let dir = dest.unwrap_or_else(cli::default_user_tf_dir);
+        match cli::install_embedded_libs(&dir) {
+            Ok(0) => println!("All files already present in {} (nothing written).", dir.display()),
+            Ok(n) => println!("Installed {n} file(s) to {}.", dir.display()),
+            Err(e) => {
+                eprintln!("tf: --install-libs: {e}");
+                std::process::exit(1);
+            }
+        }
+        std::process::exit(0);
+    }
+
     let mut event_loop = EventLoop::new();
 
     // ── Thread CLI flags through to event loop ────────────────────────────────
@@ -53,20 +67,17 @@ async fn main() {
         .interp
         .set_global_var("features", Value::Str(tf_features_string()));
 
-    // ── Set TFLIBDIR in the interpreter ───────────────────────────────────────
-    let libdir = cli::resolve_libdir(args.libdir.as_ref());
+    // ── Resolve lib source and set TFLIBDIR / TFLIBRARY ──────────────────────
+    let lib_source = cli::resolve_libdir(args.libdir.as_ref());
+    let libdir_str = lib_source.as_path().display().to_string();
     event_loop
         .interp
-        .set_global_var("TFLIBDIR", Value::Str(libdir.display().to_string()));
-
-    let tflibrary = libdir.join("stdlib.tf");
+        .set_global_var("TFLIBDIR", Value::Str(libdir_str.clone()));
     event_loop
         .interp
-        .set_global_var("TFLIBRARY", Value::Str(tflibrary.display().to_string()));
+        .set_global_var("TFLIBRARY", Value::Str(format!("{libdir_str}/stdlib.tf")));
 
     // ── Set variable defaults (mirrors C TF's init_variables / varlist.h) ────
-    // These are read by stdlib.tf and user scripts; set sensible defaults so
-    // they exist even if the user never assigns them.
     for (name, val) in [
         ("quiet",  Value::Int(if args.quiet_login { 1 } else { 0 })),
         ("gag",    Value::Int(0)),
@@ -81,7 +92,15 @@ async fn main() {
     }
 
     // ── Load stdlib.tf (required — fatal if missing) ──────────────────────────
-    if let Err(e) = event_loop.load_script_file(&tflibrary) {
+    let stdlib_result = match &lib_source {
+        LibSource::Path(dir) => event_loop.load_script_file(&dir.join("stdlib.tf")),
+        LibSource::Embedded(_) => {
+            let src = tf::embedded::get_embedded("stdlib.tf")
+                .expect("stdlib.tf is always embedded");
+            event_loop.load_script_source(src, "stdlib.tf")
+        }
+    };
+    if let Err(e) = stdlib_result {
         eprintln!("tf: Can't read required library: {e}");
         std::process::exit(1);
     }
@@ -104,10 +123,6 @@ async fn main() {
     }
 
     // ── Set %visual and %interactive (mirrors C TF main.c:201-207) ──────────
-    // C sets these after config loading, only if not explicitly set (< 0).
-    // We always set them here; a user config loaded above may have overridden
-    // them by the time we reach this point, but stdlib.tf reads them on connect
-    // so they must be present with sensible defaults.
     let is_tty = unsafe {
         libc::isatty(libc::STDIN_FILENO) != 0 && libc::isatty(libc::STDOUT_FILENO) != 0
     };
@@ -146,8 +161,6 @@ async fn main() {
     if !args.no_connect {
         match args.connect {
             ConnectTarget::Default => {
-                // Always attempt (matching C TF behaviour); connect_world_by_name
-                // will display "% Unknown world ''" if no default world is defined.
                 event_loop.connect_world_by_name("").await;
             }
             ConnectTarget::World(name) => {
@@ -161,7 +174,6 @@ async fn main() {
             }
         }
     } else {
-        // -n flag: no automatic connection (mirrors C TF main.c:221-222).
         let msg = "---- No world ----";
         event_loop.push_output(msg);
         event_loop.fire_hook(Hook::World, msg).await;

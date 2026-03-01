@@ -1,6 +1,7 @@
 pub mod attr;
 pub mod cli;
 pub mod config;
+pub mod embedded;
 pub mod event_loop;
 pub mod lua;
 pub mod python;
