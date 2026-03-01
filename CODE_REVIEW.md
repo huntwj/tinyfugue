@@ -167,7 +167,7 @@ first invocation (or eagerly at `/def` time). Cache thereafter.
 
 ### H10 — `try_send` silently drops Lua/Python commands
 **File:** `lua.rs` ~line 180, `python.rs` ~line 194
-**Status:** [ ]
+**Status:** [x]
 
 `tx.try_send(command)` discards commands without error when the channel is full (capacity
 64). A busy Lua/Python script silently loses TF commands with no indication of failure.

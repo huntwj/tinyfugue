@@ -74,42 +74,51 @@ mod python_impl {
     /// `tf.eval(command)` — queue a TF script for the event loop.
     #[pyfunction]
     #[pyo3(name = "eval")]
-    fn pytf_eval(script: String) {
-        let guard = STATE.lock().unwrap();
-        if let Some(state) = guard.as_ref() {
-            let _ = state.cmd_tx.try_send(PythonCommand::Eval { script });
+    fn pytf_eval(script: String) -> PyResult<()> {
+        // Clone Arc out before releasing STATE lock so send() doesn't hold the lock.
+        let state_arc = STATE.lock().unwrap().clone();
+        if let Some(state) = state_arc {
+            state.cmd_tx.send(PythonCommand::Eval { script })
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("tf channel closed: {e}")))?;
         }
+        Ok(())
     }
 
     /// `tf.send(text[, world])` — queue a line to a MUD world.
     #[pyfunction]
     #[pyo3(name = "send", signature = (text, world = None))]
-    fn pytf_send(text: String, world: Option<String>) {
-        let guard = STATE.lock().unwrap();
-        if let Some(state) = guard.as_ref() {
+    fn pytf_send(text: String, world: Option<String>) -> PyResult<()> {
+        let state_arc = STATE.lock().unwrap().clone();
+        if let Some(state) = state_arc {
             let world = world.filter(|s| !s.is_empty());
-            let _ = state.cmd_tx.try_send(PythonCommand::Send { text, world });
+            state.cmd_tx.send(PythonCommand::Send { text, world })
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("tf channel closed: {e}")))?;
         }
+        Ok(())
     }
 
     /// `tf.out(text)` — display text on the TF output stream.
     #[pyfunction]
     #[pyo3(name = "out")]
-    fn pytf_out(text: String) {
-        let guard = STATE.lock().unwrap();
-        if let Some(state) = guard.as_ref() {
-            let _ = state.cmd_tx.try_send(PythonCommand::Out { text });
+    fn pytf_out(text: String) -> PyResult<()> {
+        let state_arc = STATE.lock().unwrap().clone();
+        if let Some(state) = state_arc {
+            state.cmd_tx.send(PythonCommand::Out { text })
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("tf channel closed: {e}")))?;
         }
+        Ok(())
     }
 
     /// `tf.err(text)` — display text on the TF error stream.
     #[pyfunction]
     #[pyo3(name = "err")]
-    fn pytf_err(text: String) {
-        let guard = STATE.lock().unwrap();
-        if let Some(state) = guard.as_ref() {
-            let _ = state.cmd_tx.try_send(PythonCommand::Err { text });
+    fn pytf_err(text: String) -> PyResult<()> {
+        let state_arc = STATE.lock().unwrap().clone();
+        if let Some(state) = state_arc {
+            state.cmd_tx.send(PythonCommand::Err { text })
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("tf channel closed: {e}")))?;
         }
+        Ok(())
     }
 
     /// `tf.world()` → str — return the active world name (or "").

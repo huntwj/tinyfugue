@@ -177,7 +177,8 @@ mod lua_impl {
                 globals.set(
                     "tf_eval",
                     lua.create_function(move |_, script: String| {
-                        let _ = tx.try_send(LuaCommand::Eval { script });
+                        tx.send(LuaCommand::Eval { script })
+                            .map_err(|e| LuaError::runtime(format!("tf channel closed: {e}")))?;
                         Ok(())
                     })?,
                 )?;
@@ -191,7 +192,8 @@ mod lua_impl {
                     lua.create_function(
                         move |_, (text, world, flags): (String, Option<String>, Option<String>)| {
                             let world = world.filter(|s| !s.is_empty());
-                            let _ = tx.try_send(LuaCommand::Send { text, world, flags });
+                            tx.send(LuaCommand::Send { text, world, flags })
+                                .map_err(|e| LuaError::runtime(format!("tf channel closed: {e}")))?;
                             Ok(1i64)
                         },
                     )?,
