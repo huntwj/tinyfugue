@@ -258,7 +258,7 @@ all running on every keystroke.
 
 ### M7 — `python.rs` `print()` silently discarded
 **File:** `python.rs` `INIT_SRC` ~line 161
-**Status:** [ ]
+**Status:** [x]
 
 `sys.stdout` is redirected to `_TfStream(None)` which drops all output. Python `print()`
 calls are silently swallowed, making debugging impossible.

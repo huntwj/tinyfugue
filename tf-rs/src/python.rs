@@ -169,7 +169,7 @@ class _TfStream:
     def flush(self):
         pass
 
-sys.stdout = _TfStream(None)
+sys.stdout = _TfStream(tf.out)
 sys.stderr = _TfStream(tf.err)
 sys.argv = ['tf']
 ";
