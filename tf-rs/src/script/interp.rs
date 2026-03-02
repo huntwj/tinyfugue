@@ -280,8 +280,8 @@ pub struct Interpreter {
     /// Counter for the next fd to allocate (TF uses 1-based fds).
     next_tf_fd: i64,
     /// Snapshot of world definitions, synced by the event loop in `update_status()`.
-    /// Maps world name → `[host, port, type, character, mfile]` (all `Option<String>`).
-    pub worlds_snapshot: HashMap<String, [Option<String>; 5]>,
+    /// Maps world name → full World struct for `world_info()` lookups.
+    pub worlds_snapshot: HashMap<String, crate::world::World>,
     /// Names of macros added via `/def` (via `ScriptAction::DefMacro`), used by `ismacro()`.
     pub macro_names: HashSet<String>,
     /// Current restriction level (set by `/restrict`; can only increase).
@@ -1709,6 +1709,16 @@ impl EvalContext for Interpreter {
                 return Ok(Value::Int(if found { 1 } else { 0 }));
             }
             "nactive" => {
+                // nactive()         — count of all open connections.
+                // nactive(world)    — 1 if the named world is open, 0 otherwise.
+                if let Some(world_arg) = args.first() {
+                    let name = world_arg.to_string();
+                    let open = self.globals.get("_open_worlds")
+                        .map(|v| v.to_string())
+                        .unwrap_or_default();
+                    let found = open.split_whitespace().any(|w| w == name);
+                    return Ok(Value::Int(if found { 1 } else { 0 }));
+                }
                 return Ok(self.globals.get("nactive").cloned().unwrap_or(Value::Int(0)));
             }
             "columns" => {
@@ -1822,16 +1832,25 @@ impl EvalContext for Interpreter {
             // ── World introspection ───────────────────────────────────────────
             "world_info" => {
                 // world_info(world, field) — query a world's definition.
-                // Fields: "host", "port", "type", "character"/"char", "mfile".
+                // Mirrors C TF socket.c world_info(): returns one field of a /addworld entry.
                 let world = args.first().map(|v| v.to_string()).unwrap_or_default();
                 let field = args.get(1).map(|v| v.to_string()).unwrap_or_default();
-                let val = self.worlds_snapshot.get(&world).and_then(|info| {
+                let val = self.worlds_snapshot.get(&world).and_then(|w| {
                     match field.as_str() {
-                        "host"                  => info[0].clone(),
-                        "port"                  => info[1].clone(),
-                        "type"                  => info[2].clone(),
-                        "character" | "char"    => info[3].clone(),
-                        "mfile"                 => info[4].clone(),
+                        "name"                  => Some(w.name.clone()),
+                        "host"                  => w.host.clone(),
+                        "port"                  => w.port.clone(),
+                        "type"                  => w.world_type.clone(),
+                        "character" | "char"    => w.character.clone(),
+                        "mfile"                 => w.mfile.clone(),
+                        "password" | "pass"     => w.pass.clone(),
+                        "src" | "myhost"        => w.myhost.clone(),
+                        // "cipher": return "ssl" when SSL-enabled, "" otherwise (no live conn).
+                        "cipher"                => Some(if w.flags.ssl { "ssl".to_owned() } else { String::new() }),
+                        // "proxy": return "noproxy" when WORLD_NOPROXY, else "".
+                        "proxy"                 => Some(if w.flags.no_proxy { "noproxy".to_owned() } else { String::new() }),
+                        // "login": controlled by /login global, not per-world — return "1".
+                        "login"                 => Some("1".to_owned()),
                         _                       => None,
                     }
                 });

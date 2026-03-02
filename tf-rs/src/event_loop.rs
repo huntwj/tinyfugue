@@ -1831,13 +1831,7 @@ impl EventLoop {
         self.interp.set_global_var("nlog", crate::script::Value::Int(nlog));
         // Snapshot all world definitions for world_info() lookups.
         self.interp.worlds_snapshot = self.worlds.iter()
-            .map(|w| (w.name.clone(), [
-                w.host.clone(),
-                w.port.clone(),
-                w.world_type.clone(),
-                w.character.clone(),
-                w.mfile.clone(),
-            ]))
+            .map(|w| (w.name.clone(), w.clone()))
             .collect();
         // Build the status line: use named fields if populated, else simple format.
         let text = if self.status_fields.is_empty() {
