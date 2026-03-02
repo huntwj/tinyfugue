@@ -117,8 +117,9 @@ pub enum ScriptAction {
     UndefMacrosMatching(String),
     /// Scroll the pager by `n` lines (negative = back, positive = forward) (`morescroll(n)`).
     MoreScroll(i64),
-    /// Delete `n` characters at the cursor position in the input editor (`kbdel(n)`).
-    KbDel(usize),
+    /// Delete from cursor to target position `pos` in the input editor (`kbdel(pos)`).
+    /// Positive `pos` means forward (towards end); negative / less-than-cursor means backward.
+    KbDelTo(i64),
     /// Move the input-editor cursor to char position `pos` (`kbgoto(pos)`).
     KbGoto(usize),
 
@@ -1716,11 +1717,11 @@ impl EvalContext for Interpreter {
                 return Ok(Value::Int((head_len + tail_len) as i64));
             }
             "kbdel" => {
-                // kbdel(n) — delete n chars forward from cursor; negative = backward.
-                let n = args.first().map(|v| v.as_int()).unwrap_or(1);
-                if n > 0 {
-                    self.actions.push(ScriptAction::KbDel(n as usize));
-                }
+                // kbdel(pos) — delete from cursor to target position pos.
+                // C TF semantics: pos is a buffer position, not a count.
+                // kbdel(kbpoint()-1) = backspace; kbdel(kbpoint()+1) = forward-delete.
+                let pos = args.first().map(|v| v.as_int()).unwrap_or(0);
+                self.actions.push(ScriptAction::KbDelTo(pos));
                 return Ok(Value::Int(1));
             }
             "kbgoto" => {

@@ -236,15 +236,15 @@ impl Keymap {
         self.bind(ctrl('N'), KeyBinding::DoKey(RecallForward));
         self.bind(ctrl('P'), KeyBinding::DoKey(RecallBackward));
         self.bind(ctrl('R'), KeyBinding::DoKey(SearchBackward));
-        self.bind(ctrl('U'), KeyBinding::Macro("/dokey_debol".into()));
+        self.bind(ctrl('U'), KeyBinding::Macro("/kb_backward_kill_line".into()));
         self.bind(ctrl('V'), KeyBinding::DoKey(LiteralNext));
         self.bind(ctrl('W'), KeyBinding::Macro("/dokey_bword".into()));
         self.bind(ctrl('Y'), KeyBinding::Macro("/dokey_yank".into()));
         self.bind(ctrl('Z'), KeyBinding::DoKey(Pause));
 
-        // Backspace and DEL.
-        self.bind(vec![0x08], KeyBinding::Macro("/dokey_dch".into())); // C-h / BS
-        self.bind(vec![0x7F], KeyBinding::Macro("/dokey_bch".into())); // DEL
+        // Backspace and DEL — both delete the character before the cursor.
+        self.bind(vec![0x08], KeyBinding::Macro("/dokey_bspc".into())); // C-h
+        self.bind(vec![0x7F], KeyBinding::Macro("/dokey_bspc".into())); // DEL (what Backspace sends)
 
         // Arrow keys (ANSI/VT100 sequences).
         self.bind(b"\x1b[A".to_vec(), KeyBinding::DoKey(RecallBackward));  // Up

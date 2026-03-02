@@ -621,6 +621,10 @@ impl EventLoop {
                                         self.screen.scroll_down(page);
                                         self.need_refresh = true;
                                     }
+                                    EditAction::Bound(KeyBinding::Macro(body)) => {
+                                        let body = body.clone();
+                                        self.run_command(&body).await;
+                                    }
                                     _ => {
                                         if let Some(line) = self.input.apply(action) {
                                             self.dispatch_line(line).await;
@@ -1300,10 +1304,18 @@ impl EventLoop {
                 self.need_refresh = true;
             }
 
-            ScriptAction::KbDel(n) => {
-                let pos = self.input.editor.pos;
-                let end = (pos + n).min(self.input.editor.len());
-                self.input.editor.delete_region(pos, end);
+            ScriptAction::KbDelTo(target) => {
+                let cursor = self.input.editor.pos;
+                let len = self.input.editor.len();
+                let target = (target.max(0) as usize).min(len);
+                let (start, end) = if target < cursor {
+                    (target, cursor)
+                } else {
+                    (cursor, target)
+                };
+                if start < end {
+                    self.input.editor.delete_region(start, end);
+                }
                 self.need_refresh = true;
             }
 
