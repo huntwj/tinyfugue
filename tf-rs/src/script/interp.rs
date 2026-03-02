@@ -6,6 +6,7 @@
 //! function calls.
 
 use std::collections::{HashMap, HashSet};
+use std::str::FromStr;
 use std::sync::Arc;
 
 use crate::hook::{Hook, HookSet};
@@ -133,6 +134,9 @@ pub enum ScriptAction {
     StatusEdit { name: String, raw: String },
     /// Remove all status bar fields (`/status_clear`).
     StatusClear,
+    /// Fire a hook directly at runtime (`/trigger -hHOOK args`).
+    /// Mirrors C TF's `do_hook()` call from `handle_trigger_command`.
+    FireHook { hook: Hook, args: String },
     /// Add a line to the input history (`/recordline line`).
     RecordLine(String),
     /// Set the watchdog interval in seconds (0 = disable) (`/watchdog [n]`).
@@ -545,7 +549,62 @@ impl Interpreter {
             }
 
             // ── Macro definition ───────────────────────────────────────────────
-            "def" | "trigger" | "hook" | "bind" => {
+            "trigger" => {
+                // /trigger -h<HOOK> [args]  — fire hook directly (used by proxy_command).
+                // /trigger [-flags] [name = body]  — define a macro (same as /def).
+                // Scan tokens for a -h<NAME> flag; if found, fire the hook immediately.
+                let trimmed = args.trim();
+                let mut hook_flag: Option<(&str, &str)> = None; // (hook_name, rest_of_args)
+                let mut scan = trimmed;
+                loop {
+                    // Skip leading whitespace between tokens.
+                    scan = scan.trim_start();
+                    if !scan.starts_with('-') { break; }
+                    // Find end of this token.
+                    let end = scan.find(char::is_whitespace).unwrap_or(scan.len());
+                    let tok = &scan[..end];
+                    let rest = scan[end..].trim_start();
+                    if let Some(name) = tok.strip_prefix("-h").or_else(|| tok.strip_prefix("-H")) {
+                        if name.is_empty() {
+                            // -h <NAME> (space-separated)
+                            let (hook_name, after) = rest.split_once(char::is_whitespace)
+                                .unwrap_or((rest, ""));
+                            hook_flag = Some((hook_name, after.trim_start()));
+                        } else {
+                            // -hNAME (no space)
+                            hook_flag = Some((name, rest));
+                        }
+                        break;
+                    }
+                    scan = rest;
+                    if end == scan.len() { break; }
+                }
+
+                if let Some((hook_name, hook_args)) = hook_flag {
+                    match Hook::from_str(hook_name) {
+                        Ok(hook) => {
+                            self.actions.push(ScriptAction::FireHook {
+                                hook,
+                                args: hook_args.to_owned(),
+                            });
+                        }
+                        Err(e) => self.output.push(format!("% /trigger: {e}")),
+                    }
+                    return Ok(None);
+                }
+
+                // No -h flag: fall through to macro definition (same as /def).
+                let mac = parse_def(args);
+                if let Some(name) = &mac.name {
+                    if let Some(body) = &mac.body {
+                        self.macros.insert(name.clone(), CachedMacro::new(body.clone()));
+                    }
+                }
+                self.actions.push(ScriptAction::DefMacro(mac));
+                Ok(None)
+            }
+
+            "def" | "hook" | "bind" => {
                 // /def [-flags…] name = body
                 let mac = parse_def(args);
                 if let Some(name) = &mac.name {
@@ -2858,5 +2917,39 @@ mod tests {
         interp.exec_script("/edit").unwrap();
         let actions = interp.take_actions();
         assert!(matches!(&actions[0], ScriptAction::EditInput));
+    }
+
+    #[test]
+    fn trigger_h_fires_hook() {
+        use crate::hook::Hook;
+        let mut interp = Interpreter::new();
+        // Compact form: /trigger -hCONNECT myworld
+        interp.exec_script("/trigger -hCONNECT myworld").unwrap();
+        let actions = interp.take_actions();
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(&actions[0],
+            ScriptAction::FireHook { hook: Hook::Connect, args } if args == "myworld"
+        ));
+    }
+
+    #[test]
+    fn trigger_h_space_separated() {
+        use crate::hook::Hook;
+        let mut interp = Interpreter::new();
+        // Space-separated form: /trigger -h CONNECT myworld
+        interp.exec_script("/trigger -h CONNECT myworld").unwrap();
+        let actions = interp.take_actions();
+        assert!(matches!(&actions[0],
+            ScriptAction::FireHook { hook: Hook::Connect, args } if args == "myworld"
+        ));
+    }
+
+    #[test]
+    fn trigger_no_h_still_defines_macro() {
+        let mut interp = Interpreter::new();
+        // Without -h, /trigger should define a macro just like /def.
+        interp.exec_script("/trigger -mglob pat = body").unwrap();
+        let actions = interp.take_actions();
+        assert!(matches!(&actions[0], ScriptAction::DefMacro(_)));
     }
 }

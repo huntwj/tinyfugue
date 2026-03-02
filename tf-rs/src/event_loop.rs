@@ -1357,6 +1357,12 @@ impl EventLoop {
                 self.sync_status_fields_global();
                 self.need_refresh = true;
             }
+
+            ScriptAction::FireHook { hook, args } => {
+                // /trigger -hHOOK args — fire a hook directly at runtime.
+                // Used by stdlib.tf's proxy_command after sending the proxy connect string.
+                self.fire_hook(hook, &args).await;
+            }
         }
     }
 

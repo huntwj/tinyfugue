@@ -251,6 +251,441 @@ Most can be stubbed as reasonable defaults.
 
 ---
 
+## Proxy / Connection Gaps
+
+### [P1] `/trigger -h<HOOK> args` — fire a hook directly at runtime — Task #20
+**C source**: `command.c` (`handle_trigger_command`), `stdlib.tf:388-390`
+
+`/trigger -hCONNECT ${world_name}` fires `H_CONNECT` immediately.  This is
+called by `proxy_command` (via `proxy_hook`) right after sending the proxy
+connect string, so that the normal CONNECT and LOGIN flows happen through a
+proxy connection.  Without this, proxy connections never fire H_CONNECT or
+H_LOGIN.
+
+**Rust status**: `/trigger` in `interp.rs` only handles macro definitions; the
+`-h` flag is not parsed.  **This breaks proxy support end-to-end.**
+
+**Fix**: In `exec_builtin` for `/trigger`, detect `-h<name>` flag, resolve the
+hook name via `Hook::from_str`, and call `self.actions.push(ScriptAction::FireHook(hook, args))`.
+Add a `ScriptAction::FireHook` variant handled in `EventLoop::handle_script_action`.
+
+---
+
+### [P2] `/connect host port` — direct connection creating a temporary world
+*(see also [C7] below — same item)*
+**C source**: `socket.c:1293-1321`, `command.c:151-177` — **Task #23**
+
+`/connect hostname 4000` (two args) creates a `WORLD_TEMP` world and connects.
+Currently Rust treats the first argument as a named world and fails with
+"Unknown world 'hostname'".
+
+**Fix**: In `connect_world_by_name` (or a new handler), detect when the name
+looks like a host (or when two args are given), create a temporary `World` with
+`flags.temp = true`, add it to `self.worlds`, and connect.
+
+---
+
+### [P3] `/fg` flags not parsed
+*(see also [C8] below — same item)*
+**C source**: `socket.c:1241-1284` — **Task #23**
+
+C supports: `-n` (background/no-socket), `-q` (quiet), `-c<n>` (Nth socket),
+and relative `+`/`-<n>` cycling.  Used by `dokey_socketf`/`dokey_socketb` in
+`kbfunc.tf` via `/fg -c$[-kbnum?:-1]`.
+
+**Rust status**: `interp.rs:647-655` treats all args as a world name — flags
+are silently ignored, so world cycling is broken.
+
+**Fix**: Parse `-c<n>` (index into `self.handles` keyset) and `-n`/`-q` flags
+before falling through to name lookup.
+
+---
+
+### [P4] `world_info()` missing fields — Task #24
+**C source**: `socket.c:4044-4081`
+
+C `world_info(worldname, field)` supports 11 fields.  Rust only handles 5
+(`host`, `port`, `type`, `character`/`char`, `mfile`).  Missing: `name`,
+`password`, `login`, `proxy`, `src`, `cipher`.
+
+**Fix**: Add the missing arms to the `world_info` match in `interp.rs`.
+`"login"` → `world_login` global; `"proxy"` → check if world name is in
+`self.handles`; others from `World` struct fields.
+
+---
+
+### [P5] `nactive(worldname)` ignores argument — Task #24
+**C source**: `socket.c:4110-4119`
+
+C returns per-world new-message count for a specific world when an arg is
+given.  Rust always returns total open world count from the `nactive` global.
+
+**Fix**: Parse optional arg; if present, look up per-world activity count.
+(Requires tracking per-world unread line count, which we currently don't.)
+
+---
+
+### [P6] `TFPROXY` environment variable not read
+**C source**: `variable.c` (proxy_host defined in `varlist.h`)
+
+C TF reads `proxy_host`/`proxy_port` as regular settable variables (set via
+`/set proxy_host=...` in `.tfrc`).  The `TFPROXY` env var is not explicitly
+read by C either — users set it via `/set`.  **Not actually a gap** — our
+`get_global_var("proxy_host")` lookup works correctly once the user does
+`/set proxy_host=...` in their `.tfrc`.
+
+*(Kept here as a note to avoid re-investigating.)*
+
+---
+
+## Missing / Broken Functions
+
+### [F5] `morescroll(n)` not implemented — Task #22
+**C source**: `expr.c:1160` — scrolls the paged-output buffer by n lines; returns lines cleared.
+Used by `/dokey_page`, `/dokey_pageback`, and any paging script.
+**Rust status**: Not present in `builtins.rs`. PgUp/PgDn keybindings that call `morescroll()` silently fail.
+**Fix**: Add to `call_fn`; queue `ScriptAction::Scroll(n)` → handled in EventLoop as `Screen::scroll`.
+
+---
+
+### [F6] `morepaused()` not implemented — Task #26
+**C source**: `expr.c:1155` — returns 1 if the active screen is paused in paged-output mode.
+**Rust status**: Not present in `builtins.rs`. Returns nothing (treated as `""`).
+**Fix**: Add to `call_fn`; return `self.interp.get_global_var("_morepaused")` (already maintained).
+
+---
+
+### [F7] `nmail()`, `nread()` not implemented — Task #26
+**C source**: `expr.c:1549-1553`.  `nmail()` = new mail count; `nread()` = unread mail count.
+**Rust status**: `nlog()` IS correctly implemented via the `nlog` global. `nmail`/`nread` are not.
+Rarely used in practice but listed in funclist.h.
+**Fix**: Stub returning 0; add `nmail` and `nread` globals defaulting to 0.
+
+---
+
+### [F8] `prompt(text)` — just prints instead of setting the input prompt — Task #21
+**C source**: `expr.c:962-963` — sets the displayed prompt string on the input line.
+**Rust status**: `interp.rs:1985-1988` pushes `"[prompt] {text}"` to output — completely wrong semantics.
+**Fix**: Queue `ScriptAction::SetPrompt(text)`; EventLoop stores it and renders it left of the input line.
+
+---
+
+### [F9] `send()` flag `"h"` — SEND hook not fired — Task #26
+**C source**: `send()` flags: `"u"` = no newline, `"h"` = fire SEND hook after sending.
+**Rust status**: `interp.rs:1820-1830` handles `"u"` but not `"h"`. The SEND hook is never fired by `send()`.
+**Fix**: If flags contains `"h"`, push `ScriptAction::FireHook(Hook::Send, text)` after the send action.
+
+---
+
+## Missing Commands / Flag Gaps
+
+### [C7] `/connect host port` — direct connect without a named world — Task #23
+**C source**: `command.c:151-177` — two-arg form creates a `WORLD_TEMP` anonymous world.
+**Rust status**: Treated as a single world name; fails with "Unknown world 'host'".
+**Fix**: In the Connect action handler, if the arg contains a space or port is given separately, create a temporary World and connect.
+
+---
+
+### [C8] `/fg` flags not parsed — Task #23
+**C source**: `socket.c:1241-1284` — `-n` (no-world), `-q` (quiet), `-c<n>` (absolute index), `+`/`-<n>` (relative cycle).
+Used by `dokey_socketf`/`dokey_socketb` in `kbfunc.tf` as `/fg -c$[-kbnum?:-1]`.
+**Rust status**: All args treated as a world name; cycling is broken.
+**Fix**: Parse flags before the name lookup in `connect_world_by_name`.
+
+---
+
+### [C9] `/connect` flags `-f`/`-b` (foreground/background) not parsed — Task #23
+**C source**: `command.c:151` — `-f` brings connection to foreground, `-b` keeps it in background.
+**Rust status**: Not parsed; all new connections become foreground.
+**Fix**: Parse flags in the Connect handler; set active_world only when `-f` or no flag.
+
+---
+
+## Environment / Variable Init Gaps
+
+### [E1] `LANG`, `LC_ALL`, `LC_CTYPE`, `LC_TIME`, `TZ` not initialized from environment — Task #25
+**C source**: `varlist.h:32-42` — C TF defines these as auto-export variables, initialized from env.
+**Rust status**: `main.rs` only sets a hardcoded list of defaults. These vars are never read from `std::env`.
+**Fix**: On startup, for each of LANG, LC_ALL, LC_CTYPE, LC_TIME, TZ: read `std::env::var()` and call `set_global_var` if set.
+
+---
+
+### [E2] `MAIL`, `TERM` not initialized from environment — Task #25
+**C source**: `varlist.h:37-38` — initialized from environment for mailbox monitoring and terminal type.
+**Rust status**: Never set.
+**Fix**: Same as E1 — read from env on startup.
+
+---
+
+### [E3] `TFPATH` not initialized — Task #25
+**C source**: `varlist.h:41` — search path for macro files.
+**Rust status**: Never set. `/load` without a path prefix won't search `TFPATH`.
+**Fix**: Read `TFPATH` env var on startup; store as `path`-typed global.
+
+---
+
+## Subtle Semantic Correctness (implemented but possibly wrong)
+
+### [Q1] `%gag` variable not actually suppressing output lines — Task #28
+**Priority**: High — users expect `/gag pattern` to silence output; if the flag
+isn't checked in the render pipeline, matching lines still appear.
+
+C TF checks `gag` flag on each trigger-matched line and skips
+`oprintf`/screen push.  Rust sets the `gag` variable and trigger `attr.gag`
+bit, but the EventLoop output path may not check the global `%gag` variable
+for lines that *don't* match any trigger.
+
+**Fix**: In `handle_net_message`, after trigger matching, skip `screen.push_line`
+if `gagged || self.interp.get_global_var("gag").map(|v| v.as_bool()).unwrap_or(false)`.
+
+---
+
+### [Q2] `%hilite` and trigger attribute merging — Task #29
+**Priority**: High — multiple `/hilite`/`/def -ah` rules on the same line should
+OR their attributes together (bold from one + red from another both apply).
+
+Two sub-issues:
+1. When multiple triggers match, Rust may only apply the last match's attrs
+   rather than folding all of them.
+2. The global `%hilite` flag (when 0) should disable attribute application
+   entirely; when 1 it enables it.  Not certain Rust checks this flag.
+
+**Fix**: Audit `find_triggers` return and the attr-fold in `handle_net_message`;
+ensure `merged_attr = actions.iter().fold(Attr::EMPTY, |a, t| a | t.attr)`.
+Check global `%hilite` before applying.
+
+---
+
+### [Q3] Trigger `-c<n>` self-destruct count not decremented — Task #33
+**Priority**: Medium — `/def -c3 pattern = body` should fire 3 times then
+auto-remove.  We likely parse the count but never decrement/remove.
+
+**C source**: `macro.c` — each trigger invocation decrements `m->nfields` (the
+count) and removes the macro when it hits 0.
+
+**Fix**: After firing a trigger, decrement its count field; if it reaches 0,
+push `ScriptAction::Undef(name)`.
+
+---
+
+### [Q4] Macro priority tiebreak ordering — Task #36
+**Priority**: Low — when two triggers have equal priority, C TF fires them in
+definition order (most recently defined first).  Our sort may differ.
+
+**Fix**: Audit `MacroStore::find_triggers` sort key; add a definition-order
+sequence number as a tiebreak.
+
+---
+
+## Connection Lifecycle Gaps
+
+### [X1] `/dc` (disconnect) may not fire H_DISCONNECT or switch active world — Task #30
+**Priority**: High — C TF's disconnect fires `H_DISCONNECT`, marks the socket
+zombie, then switches to another world if the active world disconnected.
+
+**Rust status**: Unclear whether `H_Disconnect` hook fires and whether
+`active_world` is updated after a `/dc`.
+
+**C source**: `socket.c` — `do_hook(H_DISCONNECT, ...)`, `fg_sock(NULL)`.
+
+**Fix**: Audit the Disconnect ScriptAction handler in EventLoop; ensure hook
+fires, handle is removed, and active_world switches to next available.
+
+---
+
+### [X2] `nactive` counts open handles instead of worlds with unread output — Task #31
+**Priority**: Medium — C TF's `nactive` is the count of background worlds that
+have received new text since you last viewed them — it's what drives the
+`(Active)` status bar field.  If you're on world A and world B gets output,
+`nactive` increments.
+
+**Rust status**: `nactive` global is set to `self.handles.len()` — always equal
+to the number of open connections, never decreasing.
+
+**Fix**: Track a `unread_worlds: HashSet<String>` in EventLoop; add to it when
+a background world gets a line; clear it when `/fg`-ing to that world.  Set
+`nactive` from its length.
+
+---
+
+### [X3] Per-world mfile not re-sourced on `/fg` switch — Task #36
+**Priority**: Low — C TF's `sockmload` variable controls whether a world's
+`mfile` macro file is re-sourced every time you foreground that world.  Useful
+for world-specific keybinds/triggers that should refresh on switch.
+
+**C source**: `socket.c:1229` — `if (sockmload) wload(sock->world)`.
+
+**Fix**: In the `/fg` handler, after switching active world, check `%sockmload`
+global; if set, source `world.mfile` if present.
+
+---
+
+## Hollow / Stub Subsystems
+
+### [H1] `/more` paging does not actually pause output — Task #32
+**Priority**: High — C TF pauses rendering and waits for a keypress when output
+fills the screen (`%more=1`).  We have the `%more` variable and stubs for
+`/limit`/`/relimit`/`/unlimit` but output just scrolls past.
+
+**Fix**: In `Screen::push_line`, track line count since last user interaction;
+when it exceeds `winlines`, set a `more_paused` flag and stop rendering until
+the user presses a key (similar to `less`).  Wire `_morepaused` global to this.
+
+---
+
+### [H2] `/recall` command flags incomplete — Task #33
+**Priority**: Medium — `/recall` as a command accepts flags: pattern match,
+world filter (`-w`), count (`-n`), direction (`-b` backwards).  Keyboard
+up/down arrow history works, but the command form may be a stub or partial.
+
+**C source**: `history.c` — full flag parsing.
+
+**Fix**: Audit `/recall` in `exec_builtin`; implement `-n`, `-w`, `-b`, and
+pattern-filter forms.
+
+---
+
+### [H3] `/save` may not reconstruct full session state — Task #33
+**Priority**: Medium — C TF's `/save [file]` writes `/def`, `/addworld`,
+`/set` statements to reconstruct the current macro/world/variable state.  If
+ours only saves worlds or does nothing useful, config is lost between sessions.
+
+**Fix**: Audit `/save` in `exec_builtin`; ensure it writes `/addworld` for each
+world, `/def` for each non-stdlib macro, and `/set` for user-modified variables.
+
+---
+
+## Scripting Language Gaps
+
+### [G1] `@@var` indirect variable expansion not implemented — Task #34
+**Priority**: High — `@@varname` expands to the value of the variable *named
+by* `%varname`.  Used in advanced dispatch patterns.  Almost certainly not
+implemented in our expander.
+
+**C source**: `expand.c` — handles `@@` prefix specially.
+
+**Fix**: In the variable-expansion path in `interp.rs`, detect `@@name`; look
+up `%name`, then look up `%{value-of-name}`.
+
+---
+
+### [G2] `%()` inline expression form — Task #34
+**Priority**: High — `%(expr)` evaluates an expression inline during string
+expansion, distinct from `$[expr]`.  Both are used in `lib/tf/*.tf`.
+
+**C source**: `expand.c`.
+
+**Fix**: In the string expander, detect `%(` and eval the contained expression,
+substituting the result.  Audit whether this is already handled or silently
+dropped.
+
+---
+
+### [G3] `/shift` command — Task #34
+**Priority**: High — shifts positional arguments left: `{2}` becomes `{1}`, etc.
+Used in multi-arg macro dispatch.
+
+**C source**: `command.c` handle_shift_command.
+
+**Fix**: In `exec_builtin`, implement `"shift"`: remove `args[0]` from the
+current frame's positional arg list and renumber.
+
+---
+
+### [G4] `/result` command — Task #34
+**Priority**: High — retrieves the return value of the last `/test` expression
+as a string.  Distinct from running `/test` again.
+
+**C source**: `command.c` — reads `last_result` global.
+
+**Fix**: Store expression results in `interp.last_result`; `/result` returns it.
+
+---
+
+## Testing Infrastructure
+
+### [T1] Non-interactive / batch mode (stdin not a tty)
+**Priority**: High — prerequisite for the test harness. — **Task #37**
+
+C TF runs non-interactively when stdin is not a tty: `%visual=0`,
+`%interactive=0`, no raw mode, output goes straight to stdout, exits on stdin
+EOF.  Combined with `-n` this gives a clean scripting sandbox:
+
+```bash
+printf '/test 1+2\n/exit\n' | tf -n
+```
+
+Rust currently calls `Terminal::enter_raw_mode()` unconditionally; this will
+fail or behave incorrectly without a tty.
+
+**Fix**: When `!isatty(stdin) || !isatty(stdout)`, skip `enter_raw_mode()`, skip
+the TUI render loop, write output lines directly to stdout, read commands from
+stdin line-by-line, exit cleanly on EOF.
+
+---
+
+### [T2] C-vs-Rust script test harness
+**Priority**: High — **Task #38** (depends on T1)
+
+A shell script or `cargo test` integration that pipes the same `.tf` commands
+to both the C and Rust binaries, normalises output (strip ANSI codes, timing),
+diffs the results, and reports mismatches.
+
+Start with hand-written cases covering: expressions, string functions,
+conditionals, loops, variable expansion edge cases (`@@var`, `%()`), positional
+args, trigger matching.
+
+---
+
+### [T3] Community TF script corpus
+**Priority**: Medium — **Task #39** (depends on T2)
+
+Collect `.tf` scripts from public archives (GitHub, MUD community sites, the
+TF mailing list) and run them through the C-vs-Rust harness.  Focus on scripts
+that exercise pure scripting (no network) so they work with `-n`.
+
+---
+
+## Low Priority / Polish
+
+### [L1] Startup message order doesn't match C TF
+**Task #27**
+
+The order of lines displayed during startup (version banner, locale messages,
+"Loading commands from ...", auto-connect output) does not match the C binary.
+Very low priority — functionally equivalent, just cosmetically different.
+
+**Fix**: Compare the C startup sequence in `main.c` step by step against
+`main.rs` and reorder the `push_line` / `println!` calls to match exactly.
+
+---
+
+### [L2] Terminal exit behavior doesn't match C TF
+**Task #36** (bundled with other low-priority items)
+
+C TF clears the screen on exit and places the shell prompt at the top.  The
+Rust binary uses a different approach (clears status/input rows, leaves output
+visible).  Deferred as "maybe" — the Rust behaviour may actually be preferable.
+
+**Fix**: In `Terminal::cleanup()`, optionally clear the full screen and move
+the cursor to row 0 before disabling raw mode.
+
+---
+
+### [H4] `/help` output doesn't match C TF
+**Priority**: Medium — **Task #35**
+
+The `/help` system produces significantly different output from C TF.  C TF
+uses a compiled index file (`tf-help.idx`) mapping topic names to byte offsets
+in a help document.  We embed `tf-help.idx` but never query it.
+
+**Fix**: Implement `/help` to search the embedded index and extract the relevant
+section, matching C TF's topic-lookup format.
+
+**C source**: `command.c` handle_help_command, `makehelp.c`.
+
+---
+
 ## Already Resolved (do not re-add)
 
 - [x] Startup banner pushed to scrollback — fixed in `main.rs`
@@ -289,7 +724,7 @@ Most can be stubbed as reasonable defaults.
 
 ## Performance
 
-### [P1] Investigate scripting performance: tree-walking vs bytecode VM
+### [P1] Investigate scripting performance: tree-walking vs bytecode VM — Task #20
 
 The C TF interpreter (`expr.c`) compiles macro bodies into a bytecode
 representation and runs them via a simple VM.  The Rust rewrite
