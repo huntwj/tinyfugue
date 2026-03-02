@@ -1278,8 +1278,15 @@ impl EventLoop {
 
                 // Trigger matching.
                 let actions = self.macro_store.find_triggers(&line, Some(world_name.as_str()));
-                let gagged = actions.iter().any(|a| a.gag);
-                let merged_attr = actions.iter().fold(Attr::EMPTY, |acc, a| acc | a.attr);
+                let global_gag = self.interp.get_global_var("gag")
+                    .map(|v| v.as_bool())
+                    .unwrap_or(false);
+                let gagged = global_gag || actions.iter().any(|a| a.gag);
+                let raw_attr = actions.iter().fold(Attr::EMPTY, |acc, a| acc | a.attr);
+                let hilite_on = self.interp.get_global_var("hilite")
+                    .map(|v| v.as_bool())
+                    .unwrap_or(true);
+                let merged_attr = if hilite_on { raw_attr } else { Attr::EMPTY };
 
                 if !gagged {
                     let ll = if merged_attr == Attr::EMPTY {
@@ -1540,7 +1547,12 @@ impl EventLoop {
                     .map(|v| v.as_bool())
                     .unwrap_or(false);
                 let gagged = global_gag || actions.iter().any(|a| a.gag);
-                let merged_attr = actions.iter().fold(Attr::EMPTY, |acc, a| acc | a.attr);
+                // Merge attrs from all matching triggers; suppress if %hilite=0.
+                let raw_attr = actions.iter().fold(Attr::EMPTY, |acc, a| acc | a.attr);
+                let hilite_on = self.interp.get_global_var("hilite")
+                    .map(|v| v.as_bool())
+                    .unwrap_or(true);
+                let merged_attr = if hilite_on { raw_attr } else { Attr::EMPTY };
 
                 if !gagged {
                     let line = if merged_attr == Attr::EMPTY {
