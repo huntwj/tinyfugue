@@ -766,16 +766,18 @@ impl EventLoop {
                     Some(name)
                 };
                 if let Some(n) = target {
-                    self.handles.remove(&n);
-                    self.world_order.retain(|w| w != &n);
-                    if self.active_world.as_deref() == Some(&n) {
-                        self.active_world = self.world_order.first().cloned();
+                    // Only proceed if the world was actually connected.
+                    if self.handles.remove(&n).is_some() {
+                        self.world_order.retain(|w| w != &n);
+                        if self.active_world.as_deref() == Some(&n) {
+                            self.active_world = self.world_order.first().cloned();
+                        }
+                        let msg = format!("** Disconnected from {n} **");
+                        self.screen.push_line(LogicalLine::plain(&msg));
+                        self.fire_hook_sync(Hook::Disconnect, &n);
+                        self.update_status();
+                        self.need_refresh = true;
                     }
-                    let msg = format!("** Disconnected from {n} **");
-                    self.screen.push_line(LogicalLine::plain(&msg));
-                    self.fire_hook_sync(Hook::Disconnect, &n);
-                    self.update_status();
-                    self.need_refresh = true;
                 }
             }
 
