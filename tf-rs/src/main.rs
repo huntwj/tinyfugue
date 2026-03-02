@@ -164,7 +164,7 @@ async fn main() {
     ] {
         // setlocale(cat, "") sets the locale from environment and returns its name.
         let result = unsafe {
-            libc::setlocale(category, b"\0".as_ptr() as *const libc::c_char)
+            libc::setlocale(category, c"".as_ptr())
         };
         if result.is_null() {
             event_loop.push_output(&format!("Invalid locale for {name}."));
