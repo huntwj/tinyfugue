@@ -412,14 +412,15 @@ impl EventLoop {
 
     /// Execute a TF script given its source directly (e.g. from embedded files).
     pub fn load_script_source(&mut self, src: &str, label: &str) -> Result<(), String> {
-        println!("% Loading commands from {label}.");
+        self.screen.push_line(LogicalLine::plain(&format!("% Loading commands from {label}.")));
         self.interp.file_load_mode = true;
         let r = self.interp.exec_script(src);
         self.interp.file_load_mode = false;
         r.map_err(|e| format!("{label}: {e}"))?;
-        // Drain output — print to stdout (terminal not in raw mode yet).
+        // Drain interpreter output into the screen buffer so it appears in
+        // the TUI window (matching C TF's behaviour where all output is in-window).
         for line in self.interp.output.drain(..) {
-            println!("{line}");
+            self.screen.push_line(LogicalLine::plain(&line));
         }
         // Process startup-safe actions.
         for action in self.interp.take_actions() {

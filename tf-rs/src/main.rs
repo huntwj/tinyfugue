@@ -152,9 +152,29 @@ async fn main() {
         "Copyright (C) 1993-2007 Ken Keys.  \
          Rust rewrite (C) 2024-2025 project contributors."
     );
+    event_loop.push_output("Type `/help copyright' for more information.");
     event_loop.push_output("Type `/help', `/help topics', or `/help intro' for help.");
     event_loop.push_output("Type `/quit' to quit tf.");
     event_loop.push_output("");
+
+    // ── Locale setup (mirrors C TF's ch_locale / init_util2) ─────────────────
+    for (category, name) in [
+        (libc::LC_CTYPE, "LC_CTYPE"),
+        (libc::LC_TIME,  "LC_TIME"),
+    ] {
+        // setlocale(cat, "") sets the locale from environment and returns its name.
+        let result = unsafe {
+            libc::setlocale(category, b"\0".as_ptr() as *const libc::c_char)
+        };
+        if result.is_null() {
+            event_loop.push_output(&format!("Invalid locale for {name}."));
+        } else {
+            let locale = unsafe { std::ffi::CStr::from_ptr(result) }
+                .to_str()
+                .unwrap_or("?");
+            event_loop.push_output(&format!("{name} category set to \"{locale}\" locale."));
+        }
+    }
 
     // ── Auto-connect ──────────────────────────────────────────────────────────
     if !args.no_connect {
