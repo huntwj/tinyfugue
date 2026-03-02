@@ -49,6 +49,9 @@ use crate::world::WorldStore;
 
 const MAIL_CHECK_INTERVAL: Duration = Duration::from_secs(60);
 const REFRESH_INTERVAL: Duration = Duration::from_millis(50);
+/// How long to wait after receiving incomplete data before flushing it as a prompt.
+/// Matches C TF's default `%prompt_sec` / `%prompt_usec` of 0.1 s.
+const PROMPT_FLUSH_DELAY: Duration = Duration::from_millis(100);
 
 // ── Keyboard byte → EditAction decoder ───────────────────────────────────
 
@@ -114,11 +117,27 @@ async fn connection_task(
     event_tx: mpsc::Sender<NetMessage>,
     world: String,
 ) {
+    // When the server sends data that doesn't end with a newline (e.g., a login
+    // prompt like "Name: "), the bytes sit in the telnet line buffer forever.
+    // We arm a short timer after each such receive; if no more data arrives
+    // within PROMPT_FLUSH_DELAY, we emit the buffered bytes as a Prompt event —
+    // matching C TF's %prompt_sec / %prompt_usec behaviour.
+    let mut prompt_deadline: Option<tokio::time::Instant> = None;
+
     loop {
+        // Build a future for the prompt timer that is Pending when not armed.
+        let prompt_sleep = async {
+            match prompt_deadline {
+                Some(dl) => tokio::time::sleep_until(dl).await,
+                None => std::future::pending().await,
+            }
+        };
+
         tokio::select! {
             result = conn.recv() => {
                 match result {
                     Ok(events) => {
+                        let had_complete_lines = events.iter().any(|e| matches!(e, NetEvent::Line(_)));
                         for ev in events {
                             let closed = matches!(ev, NetEvent::Closed);
                             if event_tx
@@ -131,6 +150,16 @@ async fn connection_task(
                             if closed {
                                 return;
                             }
+                        }
+                        // Arm or reset the prompt timer depending on whether
+                        // there is still pending (non-newline-terminated) data.
+                        if conn.has_pending() {
+                            // (Re-)arm: data arrived but no complete line yet.
+                            prompt_deadline =
+                                Some(tokio::time::Instant::now() + PROMPT_FLUSH_DELAY);
+                        } else if had_complete_lines {
+                            // Complete lines consumed any partial buffer — disarm.
+                            prompt_deadline = None;
                         }
                     }
                     Err(_) => {
@@ -145,6 +174,15 @@ async fn connection_task(
                 if conn.send_raw(&bytes).await.is_err() {
                     return;
                 }
+            }
+            _ = prompt_sleep => {
+                // Timer fired: flush buffered partial bytes as a Prompt.
+                if let Some(ev) = conn.take_pending_as_prompt() {
+                    let _ = event_tx
+                        .send(NetMessage { world: world.clone(), event: ev })
+                        .await;
+                }
+                prompt_deadline = None;
             }
             else => return,
         }

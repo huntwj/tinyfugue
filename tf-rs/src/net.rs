@@ -87,6 +87,20 @@ impl Protocol {
         }
     }
 
+    /// `true` if there are buffered bytes that haven't formed a complete line yet.
+    pub fn has_pending(&self) -> bool {
+        !self.line_buf.is_empty()
+    }
+
+    /// Flush any buffered partial-line bytes as a [`NetEvent::Prompt`] and clear the buffer.
+    pub fn take_as_prompt(&mut self) -> Option<NetEvent> {
+        if self.line_buf.is_empty() {
+            None
+        } else {
+            Some(NetEvent::Prompt(std::mem::take(&mut self.line_buf)))
+        }
+    }
+
     /// Process a raw byte slice from the network.
     ///
     /// Returns `(net_events, bytes_to_send)`.  The caller must write
@@ -327,6 +341,12 @@ impl Connection {
     pub async fn send_raw(&mut self, bytes: &[u8]) -> io::Result<()> {
         self.stream.write_all(bytes).await
     }
+
+    /// `true` if there are buffered bytes not yet emitted as a complete line.
+    pub fn has_pending(&self) -> bool { self.proto.has_pending() }
+
+    /// Flush buffered partial-line bytes as a `Prompt` event.
+    pub fn take_pending_as_prompt(&mut self) -> Option<NetEvent> { self.proto.take_as_prompt() }
 
     /// Read from the server and decode into [`NetEvent`]s.
     ///

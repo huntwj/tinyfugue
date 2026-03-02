@@ -107,27 +107,39 @@ pub fn call_builtin(name: &str, args: Vec<Value>) -> Option<Result<Value, String
             "pad" => {
                 // pad(s1, w1 [, s2, w2, ...]) — pad/truncate each si to |wi| chars and
                 // concatenate.  Positive wi = left-justify; negative wi = right-justify.
-                // This is the TF standard pad() used by tfstatus.tf for status-bar fields.
+                // Width 0 means "natural width" (no padding or truncation) — C TF semantics.
+                // A trailing string with no width partner is appended verbatim.
                 let mut out = String::new();
                 let mut i = 0;
-                while i + 1 < args.len() {
-                    let s     = args[i].to_string();
-                    let w     = args[i + 1].as_int();
+                while i < args.len() {
+                    let s = args[i].to_string();
+                    // No paired width — append verbatim (trailing string).
+                    if i + 1 >= args.len() {
+                        out.push_str(&s);
+                        break;
+                    }
+                    let w = args[i + 1].as_int();
                     let width = w.unsigned_abs() as usize;
-                    let chars: Vec<char> = s.chars().collect();
-                    let padded: String = if chars.len() >= width {
-                        chars[..width].iter().collect()
-                    } else if w >= 0 {
-                        // left-justify: pad on right
-                        let mut r: String = chars.iter().collect();
-                        while r.chars().count() < width { r.push(' '); }
-                        r
+                    if width == 0 {
+                        // Width 0 = natural width: append without padding or truncation.
+                        out.push_str(&s);
                     } else {
-                        // right-justify: pad on left
-                        let padding = " ".repeat(width - chars.len());
-                        format!("{padding}{}", chars.iter().collect::<String>())
-                    };
-                    out.push_str(&padded);
+                        let chars: Vec<char> = s.chars().collect();
+                        if chars.len() >= width {
+                            let piece: String = chars[..width].iter().collect();
+                            out.push_str(&piece);
+                        } else if w >= 0 {
+                            // left-justify: pad on right with spaces
+                            let mut r: String = chars.iter().collect();
+                            while r.chars().count() < width { r.push(' '); }
+                            out.push_str(&r);
+                        } else {
+                            // right-justify: pad on left with spaces
+                            let padding = " ".repeat(width - chars.len());
+                            let piece = format!("{padding}{}", chars.iter().collect::<String>());
+                            out.push_str(&piece);
+                        }
+                    }
                     i += 2;
                 }
                 Value::Str(out)
