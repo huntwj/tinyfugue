@@ -323,6 +323,8 @@ pub struct EventLoop {
     net_tx: mpsc::Sender<NetMessage>,
     /// Outbound handles — one per live connection.
     handles: HashMap<String, ConnectionHandle>,
+    /// Connection names in the order they were opened (used by `/fg -c<n>`).
+    world_order: Vec<String>,
     /// Which world the user is currently typing into.
     active_world: Option<String>,
 
@@ -403,6 +405,7 @@ impl EventLoop {
             net_rx,
             net_tx,
             handles: HashMap::new(),
+            world_order: Vec::new(),
             active_world: None,
             input: InputProcessor::new(500),
             key_decoder: KeyDecoder::new(),
@@ -523,6 +526,9 @@ impl EventLoop {
         tokio::spawn(connection_task(conn, cmd_rx, event_tx, name.clone()));
         let handle = ConnectionHandle { world_name: name.clone(), sender: cmd_tx };
         self.handles.insert(name.clone(), handle);
+        if !self.world_order.contains(&name) {
+            self.world_order.push(name.clone());
+        }
         if self.active_world.is_none() {
             self.active_world = Some(name);
         }
@@ -761,8 +767,9 @@ impl EventLoop {
                 };
                 if let Some(n) = target {
                     self.handles.remove(&n);
+                    self.world_order.retain(|w| w != &n);
                     if self.active_world.as_deref() == Some(&n) {
-                        self.active_world = self.handles.keys().next().cloned();
+                        self.active_world = self.world_order.first().cloned();
                     }
                     let msg = format!("** Disconnected from {n} **");
                     self.screen.push_line(LogicalLine::plain(&msg));
@@ -795,6 +802,31 @@ impl EventLoop {
                     self.screen.push_line(LogicalLine::plain(&msg));
                     self.need_refresh = true;
                 }
+            }
+
+            ScriptAction::FgWorld { index, quiet } => {
+                // /fg -c<n>: switch active world by 1-based connection index.
+                // /fg -n   : foreground "no world" (detach from all connections).
+                let next = if let Some(n) = index {
+                    // Negative n counts from end; 0 → last world.
+                    let idx = if n <= 0 {
+                        (self.world_order.len() as i64 + n).max(0) as usize
+                    } else {
+                        (n - 1).max(0) as usize
+                    };
+                    self.world_order.get(idx).cloned()
+                } else {
+                    None // /fg -n
+                };
+                self.active_world = next.clone();
+                if !quiet {
+                    let label = next.as_deref().unwrap_or("none");
+                    let world_msg = format!("---- World {label} ----");
+                    self.screen.push_line(LogicalLine::plain(&world_msg));
+                    self.fire_hook(Hook::World, &world_msg).await;
+                }
+                self.update_status();
+                self.need_refresh = true;
             }
 
             // ── Process scheduling ─────────────────────────────────────────
@@ -1557,8 +1589,9 @@ impl EventLoop {
             NetEvent::Closed => {
                 let was_active = self.active_world.as_deref() == Some(&msg.world);
                 self.handles.remove(&msg.world);
+                self.world_order.retain(|w| *w != msg.world);
                 if was_active {
-                    self.active_world = self.handles.keys().next().cloned();
+                    self.active_world = self.world_order.first().cloned();
                 }
                 let notice = format!("** Connection to {} closed **", msg.world);
                 self.screen.push_line(LogicalLine::plain(&notice));
@@ -1571,9 +1604,10 @@ impl EventLoop {
                 self.screen.push_line(LogicalLine::plain(&notice));
                 // Drop the connection handle so the task is stopped.
                 self.handles.remove(&msg.world);
+                self.world_order.retain(|w| *w != msg.world);
                 let was_active = self.active_world.as_deref() == Some(&msg.world);
                 if was_active {
-                    self.active_world = self.handles.keys().next().cloned();
+                    self.active_world = self.world_order.first().cloned();
                 }
                 self.fire_hook(Hook::Disconnect, &msg.world).await;
                 self.update_status();
@@ -1739,6 +1773,7 @@ impl EventLoop {
             self.screen.push_line(LogicalLine::plain(&msg));
             // Drop the stale handle; connection_task will notice its receiver closed.
             self.handles.remove(&world_name);
+            self.world_order.retain(|w| *w != world_name);
             // Reset the timer so we don't trigger again immediately.
             self.last_data_per_world.insert(world_name.clone(), now);
             self.connect_world_by_name(&world_name).await;
@@ -1959,6 +1994,7 @@ impl EventLoop {
 
     fn shutdown(&mut self) {
         self.handles.clear();
+        self.world_order.clear();
         self.scheduler.kill_all();
         let _ = self.terminal.flush();
     }

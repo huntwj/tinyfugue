@@ -142,6 +142,11 @@ pub enum ScriptAction {
     SetPrompt(String),
     /// Add a line to the input history (`/recordline line`).
     RecordLine(String),
+    /// Switch the foreground world by index (1-based) or disconnect foreground.
+    /// `index`: `Some(n)` = the nth connected world (1-based; negative wraps from end);
+    ///          `None`    = "no world" (`/fg -n`).
+    /// `quiet`: suppress the "---- World ----" banner.
+    FgWorld { index: Option<i64>, quiet: bool },
     /// Set the watchdog interval in seconds (0 = disable) (`/watchdog [n]`).
     SetWatchdog(u64),
     /// Set which world the watchdog monitors (`/watchname [name]`; empty = active world).
@@ -706,13 +711,75 @@ impl Interpreter {
                 Ok(None)
             }
 
-            "connect" | "fg" => {
+            "connect" => {
                 if self.restriction >= RestrictionLevel::World {
                     self.output.push("% restricted".to_owned());
                     return Ok(None);
                 }
                 let expanded = expand(args, self)?;
-                self.actions.push(ScriptAction::Connect { name: expanded.trim().to_owned() });
+                let trimmed = expanded.trim();
+                // Detect "host port" two-token form: create a temporary world.
+                let parts: Vec<&str> = trimmed.splitn(2, char::is_whitespace).collect();
+                if parts.len() == 2 {
+                    let port_str = parts[1].trim();
+                    if port_str.parse::<u16>().is_ok() {
+                        let host = parts[0].to_owned();
+                        let temp_name = format!("{host}:{port_str}");
+                        let mut w = crate::world::World::named(temp_name.clone());
+                        w.host = Some(host);
+                        w.port = Some(port_str.to_owned());
+                        w.flags.temp = true;
+                        self.actions.push(ScriptAction::AddWorld(w));
+                        self.actions.push(ScriptAction::Connect { name: temp_name });
+                        return Ok(None);
+                    }
+                }
+                self.actions.push(ScriptAction::Connect { name: trimmed.to_owned() });
+                Ok(None)
+            }
+
+            "fg" => {
+                if self.restriction >= RestrictionLevel::World {
+                    self.output.push("% restricted".to_owned());
+                    return Ok(None);
+                }
+                let expanded = expand(args, self)?;
+                let mut scan = expanded.trim();
+                let mut quiet = false;
+                let mut abs_index: Option<i64> = None;
+                let mut no_world = false;
+                // Parse flags: -c<n>, -n, -q.  Stop at first non-flag token.
+                loop {
+                    scan = scan.trim_start();
+                    if scan.is_empty() { break; }
+                    if let Some(rest) = scan.strip_prefix('-') {
+                        if let Some(num_str) = rest.strip_prefix('c') {
+                            let (n_tok, tail) = num_str.split_once(char::is_whitespace)
+                                .unwrap_or((num_str, ""));
+                            if let Ok(n) = n_tok.parse::<i64>() {
+                                abs_index = Some(n);
+                                scan = tail;
+                                continue;
+                            }
+                        }
+                        match rest.chars().next() {
+                            Some('n') => { no_world = true; scan = &rest[1..]; }
+                            Some('q') => { quiet    = true; scan = &rest[1..]; }
+                            _ => break,
+                        }
+                    } else {
+                        break;
+                    }
+                }
+                let world_name = scan.trim().to_owned();
+                if no_world {
+                    self.actions.push(ScriptAction::FgWorld { index: None, quiet });
+                } else if let Some(n) = abs_index {
+                    self.actions.push(ScriptAction::FgWorld { index: Some(n), quiet });
+                } else {
+                    // Named switch — foreground an already-connected world.
+                    self.actions.push(ScriptAction::SwitchWorld { name: world_name });
+                }
                 Ok(None)
             }
 
@@ -2954,5 +3021,68 @@ mod tests {
         interp.exec_script("/trigger -mglob pat = body").unwrap();
         let actions = interp.take_actions();
         assert!(matches!(&actions[0], ScriptAction::DefMacro(_)));
+    }
+
+    #[test]
+    fn connect_host_port_creates_temp_world() {
+        let mut interp = Interpreter::new();
+        interp.exec_script("/connect mud.example.com 4000").unwrap();
+        let actions = interp.take_actions();
+        // Should push AddWorld (temp) then Connect.
+        assert_eq!(actions.len(), 2);
+        if let ScriptAction::AddWorld(w) = &actions[0] {
+            assert_eq!(w.name, "mud.example.com:4000");
+            assert_eq!(w.host.as_deref(), Some("mud.example.com"));
+            assert_eq!(w.port.as_deref(), Some("4000"));
+            assert!(w.flags.temp);
+        } else {
+            panic!("expected AddWorld, got {:?}", actions[0]);
+        }
+        assert!(matches!(&actions[1], ScriptAction::Connect { name } if name == "mud.example.com:4000"));
+    }
+
+    #[test]
+    fn connect_named_world_no_temp() {
+        let mut interp = Interpreter::new();
+        interp.exec_script("/connect myworld").unwrap();
+        let actions = interp.take_actions();
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(&actions[0], ScriptAction::Connect { name } if name == "myworld"));
+    }
+
+    #[test]
+    fn fg_abs_index_pushes_fg_world() {
+        let mut interp = Interpreter::new();
+        interp.exec_script("/fg -c3").unwrap();
+        let actions = interp.take_actions();
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(&actions[0], ScriptAction::FgWorld { index: Some(3), quiet: false }));
+    }
+
+    #[test]
+    fn fg_no_world() {
+        let mut interp = Interpreter::new();
+        interp.exec_script("/fg -n").unwrap();
+        let actions = interp.take_actions();
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(&actions[0], ScriptAction::FgWorld { index: None, quiet: false }));
+    }
+
+    #[test]
+    fn fg_named_switches_world() {
+        let mut interp = Interpreter::new();
+        interp.exec_script("/fg myworld").unwrap();
+        let actions = interp.take_actions();
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(&actions[0], ScriptAction::SwitchWorld { name } if name == "myworld"));
+    }
+
+    #[test]
+    fn fg_quiet_flag() {
+        let mut interp = Interpreter::new();
+        interp.exec_script("/fg -q -c2").unwrap();
+        let actions = interp.take_actions();
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(&actions[0], ScriptAction::FgWorld { index: Some(2), quiet: true }));
     }
 }
