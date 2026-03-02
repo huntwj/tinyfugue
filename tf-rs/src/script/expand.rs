@@ -24,6 +24,8 @@
 //! | `{*-default}`      | All params joined, or `default` if no params         |
 //! | `{P}` / `%P`       | Current command/macro name                           |
 //! | `$[expr]`          | Evaluate `expr` and substitute the result            |
+//! | `%(expr)`          | Same as `$[expr]` — alternate inline-expression form |
+//! | `@@varname`        | Indirect expansion: look up %varname, then look up the resulting name |
 //! | `$$`               | Literal `$`                                          |
 
 use super::expr::{EvalContext, eval_str};
@@ -37,8 +39,50 @@ pub fn expand(src: &str, ctx: &mut dyn EvalContext) -> Result<String, String> {
 
     while let Some(ch) = chars.next() {
         match ch {
+            '@' => {
+                // @@varname — indirect expansion: expand %varname, then use that
+                // value as a variable name and look up *its* value.
+                // Mirrors C TF expand.c `@@` handling.
+                if chars.peek().copied() == Some('@') {
+                    chars.next(); // consume second '@'
+                    // Read the variable name (identifier chars).
+                    let mut name = String::new();
+                    if matches!(chars.peek(), Some(c) if is_ident_start(*c)) {
+                        name.push(chars.next().unwrap());
+                        while matches!(chars.peek(), Some(c) if is_ident_continue(*c)) {
+                            name.push(chars.next().unwrap());
+                        }
+                    }
+                    // First dereference: value of %name.
+                    let inner = lookup_var(&name, ctx);
+                    // Second dereference: value of %<inner>.
+                    out.push_str(&lookup_var(&inner, ctx));
+                } else {
+                    out.push('@');
+                }
+            }
             '%' => {
                 match chars.peek().copied() {
+                    Some('(') => {
+                        // %(expr) — inline expression, equivalent to $[expr].
+                        // Mirrors C TF expand.c '%' '(' case.
+                        chars.next(); // consume '('
+                        let mut expr_src = String::new();
+                        let mut depth = 1usize;
+                        for ec in chars.by_ref() {
+                            match ec {
+                                '(' => { depth += 1; expr_src.push(ec); }
+                                ')' => {
+                                    depth -= 1;
+                                    if depth == 0 { break; }
+                                    expr_src.push(ec);
+                                }
+                                _ => expr_src.push(ec),
+                            }
+                        }
+                        let val = ctx.eval_expr_str(&expr_src)?;
+                        out.push_str(&val.to_string());
+                    }
                     Some('{') => {
                         // %{name} — consume '{'
                         chars.next();
@@ -635,5 +679,37 @@ mod tests {
         ctx.params = vec!["only".into()];
         // Single param → no all-but-last → expand default %{qdef_prefix-:|}
         assert_eq!(exp("%{-L-%{qdef_prefix-:|}}", &mut ctx), ">>");
+    }
+
+    #[test]
+    fn double_at_indirect_expansion() {
+        let mut ctx = TestCtx::new();
+        // %ptr = "target", %target = "hello"
+        ctx.vars.insert("ptr".into(),    Value::Str("target".into()));
+        ctx.vars.insert("target".into(), Value::Str("hello".into()));
+        // @@ptr → value of %ptr ("target") → value of %target ("hello")
+        assert_eq!(exp("@@ptr", &mut ctx), "hello");
+    }
+
+    #[test]
+    fn double_at_missing_inner() {
+        let mut ctx = TestCtx::new();
+        // %ptr = "nosuch" — second dereference finds nothing → empty string
+        ctx.vars.insert("ptr".into(), Value::Str("nosuch".into()));
+        assert_eq!(exp("@@ptr", &mut ctx), "");
+    }
+
+    #[test]
+    fn percent_paren_inline_expr() {
+        let mut ctx = TestCtx::new();
+        // %(3 + 4) should evaluate to "7"
+        assert_eq!(exp("%(3 + 4)", &mut ctx), "7");
+    }
+
+    #[test]
+    fn percent_paren_with_var() {
+        let mut ctx = TestCtx::new();
+        ctx.vars.insert("x".into(), Value::Int(10));
+        assert_eq!(exp("result=%(x * 2)", &mut ctx), "result=20");
     }
 }
