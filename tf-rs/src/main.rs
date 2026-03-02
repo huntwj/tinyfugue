@@ -91,6 +91,16 @@ async fn main() {
         event_loop.interp.set_global_var(name, val);
     }
 
+    // ── Initialize env-sourced globals (mirrors C TF variable.c init_variables) ──
+    // These are read-only mirrors of shell environment variables.  Set before
+    // loading stdlib.tf so that scripts can reference %LANG, %MAIL, %TFPATH, etc.
+    for env_name in ["LANG", "LC_ALL", "LC_CTYPE", "LC_TIME", "TZ",
+                     "MAIL", "TERM", "TFPATH", "TINYFUGUE"] {
+        if let Ok(val) = std::env::var(env_name) {
+            event_loop.interp.set_global_var(env_name, Value::Str(val));
+        }
+    }
+
     // ── Load stdlib.tf (required — fatal if missing) ──────────────────────────
     let stdlib_result = match &lib_source {
         LibSource::Path(dir) => event_loop.load_script_file(&dir.join("stdlib.tf")),
