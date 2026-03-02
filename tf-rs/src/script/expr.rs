@@ -93,6 +93,7 @@ pub enum Token {
     Question,
     Colon,
     Comma,
+    Dot,
     LParen,
     RParen,
     /// Unrecognised input byte — reported as a diagnostic instead of masking as EOF.
@@ -325,6 +326,7 @@ impl<'a> Lexer<'a> {
             b'?' => Token::Question,
             b':' => Token::Colon,
             b',' => Token::Comma,
+            b'.' => Token::Dot,
             b'(' => Token::LParen,
             b')' => Token::RParen,
             c => Token::Unknown(c as char),
@@ -351,6 +353,7 @@ impl<'a> Lexer<'a> {
 pub enum BinOp {
     Add,
     Sub,
+    Concat,
     Mul,
     Div,
     Rem,
@@ -589,6 +592,7 @@ impl Parser {
             let op = match self.peek() {
                 Token::Plus => BinOp::Add,
                 Token::Minus => BinOp::Sub,
+                Token::Dot => BinOp::Concat,
                 _ => break,
             };
             self.pos += 1;
@@ -771,6 +775,7 @@ fn eval_binop(op: &BinOp, l: Value, r: Value, _ctx: &mut dyn EvalContext) -> Res
     match op {
         BinOp::Add => Ok(l.arith_add(&r)),
         BinOp::Sub => Ok(l.arith_sub(&r)),
+        BinOp::Concat => Ok(Value::Str(format!("{}{}", l.as_str(), r.as_str()))),
         BinOp::Mul => Ok(l.arith_mul(&r)),
         BinOp::Div => l.arith_div(&r),
         BinOp::Rem => l.arith_rem(&r),

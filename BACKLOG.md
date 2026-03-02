@@ -456,15 +456,11 @@ Check global `%hilite` before applying.
 
 ---
 
-### [Q3] Trigger `-c<n>` self-destruct count not decremented — Task #33
-**Priority**: Medium — `/def -c3 pattern = body` should fire 3 times then
-auto-remove.  We likely parse the count but never decrement/remove.
-
-**C source**: `macro.c` — each trigger invocation decrements `m->nfields` (the
-count) and removes the macro when it hits 0.
-
-**Fix**: After firing a trigger, decrement its count field; if it reaches 0,
-push `ScriptAction::Undef(name)`.
+### [Q3] Trigger `-c<n>` self-destruct count — DONE
+**Resolution**: `TriggerAction` now carries `macro_num` and `shots`.
+`MacroStore::decrement_shots(num)` decrements and auto-removes at zero.
+All three fire paths (NetEvent::Line, FakeRecv, fire_hook_sync) decrement
+shots after executing trigger/hook bodies.
 
 ---
 
@@ -522,36 +518,28 @@ global; if set, source `world.mfile` if present.
 
 ## Hollow / Stub Subsystems
 
-### [H1] `/more` paging does not actually pause output — Task #32
-**Priority**: High — C TF pauses rendering and waits for a keypress when output
-fills the screen (`%more=1`).  We have the `%more` variable and stubs for
-`/limit`/`/relimit`/`/unlimit` but output just scrolls past.
-
-**Fix**: In `Screen::push_line`, track line count since last user interaction;
-when it exceeds `winlines`, set a `more_paused` flag and stop rendering until
-the user presses a key (similar to `less`).  Wire `_morepaused` global to this.
-
----
-
-### [H2] `/recall` command flags incomplete — Task #33
-**Priority**: Medium — `/recall` as a command accepts flags: pattern match,
-world filter (`-w`), count (`-n`), direction (`-b` backwards).  Keyboard
-up/down arrow history works, but the command form may be a stub or partial.
-
-**C source**: `history.c` — full flag parsing.
-
-**Fix**: Audit `/recall` in `exec_builtin`; implement `-n`, `-w`, `-b`, and
-pattern-filter forms.
+### [H1] `/more` paging — DONE
+**Resolution**: `refresh_display()` now syncs `screen.more_threshold` from
+`%more` × `winlines`. When the threshold is reached `push_line` sets
+`screen.paused = true`. The keystroke handler checks `screen.paused` first;
+any key unpauses and drains the byte batch without forwarding to the editor.
+`dispatch_line` calls `unpause()` to reset counter on user input. The
+`show_more_prompt()` + `_morepaused` global were already wired.
 
 ---
 
-### [H3] `/save` may not reconstruct full session state — Task #33
-**Priority**: Medium — C TF's `/save [file]` writes `/def`, `/addworld`,
-`/set` statements to reconstruct the current macro/world/variable state.  If
-ours only saves worlds or does nothing useful, config is lost between sessions.
+### [H2] `/recall` command flags — DONE
+**Resolution**: Implemented `-n N`, `-w <world>` (consumed/ignored — no
+per-world output history), `-b` (reverse/most-recent-first), and a bare
+pattern/count argument.  `/recall` now shows from the output scrollback
+buffer (`screen.iter_lines()`), matching C TF behaviour.
 
-**Fix**: Audit `/save` in `exec_builtin`; ensure it writes `/addworld` for each
-world, `/def` for each non-stdlib macro, and `/set` for user-modified variables.
+---
+
+### [H3] `/save` session state — DONE
+**Resolution**: `/save` now writes `/addworld` lines (from `WorldStore`)
+followed by `/def` lines (from `MacroStore`).  Variable saving is skipped
+(no mechanism to distinguish user-set vs stdlib-set variables).
 
 ---
 

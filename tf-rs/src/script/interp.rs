@@ -96,9 +96,16 @@ pub enum ScriptAction {
     ShellCmd(String),
     /// Spawn an interactive shell, temporarily leaving raw mode (`/sh` with no args).
     ShellInteractive,
-    /// Display the last `n` input history entries on screen (`/recall [n]`).
-    /// `None` means show all.
-    Recall(Option<usize>),
+    /// Display entries from the output scrollback buffer on screen (`/recall`).
+    /// Mirrors C TF `history.c:recall_history()`.
+    Recall {
+        /// Maximum number of most-recent lines to show (`None` = all).
+        count: Option<usize>,
+        /// Show most-recent lines first (reverse chronological).
+        reverse: bool,
+        /// Substring/glob pattern to filter lines; `None` = all.
+        pattern: Option<String>,
+    },
     /// Write all macros to a file (or stdout) in `/def` form (`/save [file]`).
     SaveMacros { path: Option<String> },
     /// Remove a world definition by name (`/unworld name`).
@@ -1210,22 +1217,47 @@ impl Interpreter {
             }
 
             "recall" => {
-                let n = {
-                    let s = expand(args, self)?;
-                    let t = s.trim();
-                    if t.is_empty() {
-                        None
-                    } else {
-                        match t.parse::<usize>() {
-                            Ok(n) => Some(n),
+                let expanded = expand(args, self)?;
+                let mut rest = expanded.trim();
+                let mut count: Option<usize> = None;
+                let mut reverse = false;
+                let mut pattern: Option<String> = None;
+                // Parse flags: -b (reverse), -n N (count), -w <world> (ignored),
+                // and an optional trailing pattern or bare count.
+                loop {
+                    if rest.is_empty() {
+                        break;
+                    }
+                    if rest.starts_with("-b") {
+                        reverse = true;
+                        rest = rest[2..].trim_start();
+                    } else if rest.starts_with("-n") {
+                        let r = rest[2..].trim_start();
+                        let end = r.find(char::is_whitespace).unwrap_or(r.len());
+                        match r[..end].parse::<usize>() {
+                            Ok(n) => { count = Some(n); rest = r[end..].trim_start(); }
                             Err(_) => {
-                                self.output.push(format!("% /recall: invalid count '{t}'"));
+                                self.output.push("% /recall -n: invalid count".to_owned());
                                 return Ok(None);
                             }
                         }
+                    } else if rest.starts_with("-w") {
+                        // World filter: we don't have per-world scrollback, so we
+                        // consume and ignore the argument.
+                        let r = rest[2..].trim_start();
+                        let end = r.find(char::is_whitespace).unwrap_or(r.len());
+                        rest = r[end..].trim_start();
+                    } else {
+                        // Bare argument: a count or a pattern.
+                        if let Ok(n) = rest.parse::<usize>() {
+                            count = Some(n);
+                        } else {
+                            pattern = Some(rest.to_owned());
+                        }
+                        break;
                     }
-                };
-                self.actions.push(ScriptAction::Recall(n));
+                }
+                self.actions.push(ScriptAction::Recall { count, reverse, pattern });
                 Ok(None)
             }
 
@@ -1651,7 +1683,7 @@ impl EvalContext for Interpreter {
             "echo"    => return self.builtin_echo_fn(&args),
             "prompt"  => return self.builtin_prompt_fn(&args),
             "substitute" => return self.builtin_substitute_fn(&args),
-            "isvar" => {
+            "isvar" | "isset" => {
                 let vname = args.first().map(|v| v.to_string()).unwrap_or_default();
                 let exists = self.get_var(&vname).is_some();
                 return Ok(Value::Int(if exists { 1 } else { 0 }));
@@ -1709,7 +1741,7 @@ impl EvalContext for Interpreter {
                 return Ok(Value::Int(if found { 1 } else { 0 }));
             }
             "nactive" => {
-                // nactive()         — count of all open connections.
+                // nactive()         — count of background worlds with unread output.
                 // nactive(world)    — 1 if the named world is open, 0 otherwise.
                 if let Some(world_arg) = args.first() {
                     let name = world_arg.to_string();

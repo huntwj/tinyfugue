@@ -192,7 +192,11 @@ pub fn expand(src: &str, ctx: &mut dyn EvalContext) -> Result<String, String> {
                                 _ => expr_src.push(ec),
                             }
                         }
-                        let val = ctx.eval_expr_str(&expr_src)?;
+                        // Pre-expand %var references inside the expression
+                        // so that "$[%n-1]" correctly substitutes %n before
+                        // the expression evaluator runs (which treats % as modulo).
+                        let expanded_src = expand(&expr_src, ctx)?;
+                        let val = ctx.eval_expr_str(&expanded_src)?;
                         out.push_str(&val.to_string());
                     }
                     Some('{') => {

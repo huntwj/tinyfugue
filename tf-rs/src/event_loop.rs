@@ -389,6 +389,10 @@ pub struct EventLoop {
     /// Displayed to the left of the editable input buffer (not editable itself).
     /// Mirrors C TF's `sock->prompt` / `update_prompt()`.
     input_prompt: String,
+
+    /// Background worlds that have received at least one line since the user
+    /// last foregrounded them.  Used to compute `nactive` (C TF: `active_count`).
+    unread_worlds: std::collections::HashSet<String>,
 }
 
 impl EventLoop {
@@ -431,6 +435,7 @@ impl EventLoop {
             no_autologin: false,
             quiet_login: false,
             input_prompt: String::new(),
+            unread_worlds: std::collections::HashSet::new(),
         }
     }
 
@@ -552,6 +557,15 @@ impl EventLoop {
     /// drives keyboard input, socket events, timers, and scheduled processes
     /// in a single `tokio::select!` loop.
     pub async fn run(&mut self) -> io::Result<()> {
+        // In non-interactive mode (stdin/stdout not a tty), run a simple
+        // line-by-line batch loop instead of the full TUI event loop.
+        let is_interactive = self.interp.get_global_var("interactive")
+            .map(|v| v.as_bool())
+            .unwrap_or(true);
+        if !is_interactive {
+            return self.run_batch().await;
+        }
+
         let mut sigwinch = signal(SignalKind::window_change())?;
         let mut sigterm  = signal(SignalKind::terminate())?;
         let mut sigint   = signal(SignalKind::interrupt())?;
@@ -619,6 +633,19 @@ impl EventLoop {
                         self.quit = true;
                     } else {
                         self.last_keystroke = Instant::now();
+                        // When the --More-- prompt is showing, consume the
+                        // entire keystroke batch as the unpause action.
+                        if self.screen.paused {
+                            self.screen.unpause();
+                            self.need_refresh = true;
+                            // Drain the batch from the decoder without processing.
+                            for b in bytes { let _ = self.key_decoder.push(b); }
+                            if self.need_refresh {
+                                self.refresh_display();
+                                self.need_refresh = false;
+                            }
+                            continue;
+                        }
                         for b in bytes {
                             if let Some(action) = self.key_decoder.push(b) {
                                 // Intercept scrollback ops before the editor.
@@ -708,9 +735,60 @@ impl EventLoop {
         Ok(())
     }
 
+    // ── Batch (non-interactive) mode ──────────────────────────────────────
+
+    /// Non-interactive event loop used when stdin/stdout are not a tty.
+    ///
+    /// Reads commands line-by-line from stdin, writes output to stdout,
+    /// and exits on EOF.  No raw mode, no TUI rendering.
+    async fn run_batch(&mut self) -> io::Result<()> {
+        use tokio::io::{AsyncBufReadExt, BufReader};
+        let stdin = tokio::io::stdin();
+        let mut reader = BufReader::new(stdin);
+        let mut line_buf = String::new();
+        let mut printed = 0usize; // lines already flushed to stdout
+
+        // Drain any output already queued before the loop starts.
+        let flush = |screen: &crate::screen::Screen, printed: &mut usize| {
+            let total = screen.line_count();
+            for ll in screen.iter_lines().skip(*printed) {
+                println!("{}", ll.content.data);
+            }
+            *printed = total;
+        };
+        flush(&self.screen, &mut printed);
+
+        while !self.quit {
+            line_buf.clear();
+            let n = reader.read_line(&mut line_buf).await?;
+            if n == 0 {
+                break; // EOF
+            }
+            let line = line_buf.trim_end_matches('\n')
+                                .trim_end_matches('\r')
+                                .to_owned();
+            if !line.is_empty() {
+                self.dispatch_line(line).await;
+            }
+            // Drain network events without blocking.
+            while let Ok(msg) = self.net_rx.try_recv() {
+                self.handle_net_message(msg).await;
+            }
+            // Run any due scheduled processes.
+            self.run_due_processes(Instant::now()).await;
+            // Flush new output to stdout.
+            flush(&self.screen, &mut printed);
+        }
+
+        self.shutdown();
+        Ok(())
+    }
+
     // ── Input dispatch ────────────────────────────────────────────────────
 
     async fn dispatch_line(&mut self, line: String) {
+        // User interaction resets the more-paging counter (C TF: clear after input).
+        self.screen.unpause();
         if line.starts_with('/') {
             self.run_command(&line).await;
         } else {
@@ -793,6 +871,7 @@ impl EventLoop {
             ScriptAction::SwitchWorld { name } => {
                 if self.handles.contains_key(&name) {
                     self.active_world = Some(name.clone());
+                    self.unread_worlds.remove(&name);
                     self.update_status();
                     // Fire WORLD hook and push divider (mirrors C TF world_hook()).
                     let world_msg = format!("---- World {name} ----");
@@ -821,6 +900,9 @@ impl EventLoop {
                     None // /fg -n
                 };
                 self.active_world = next.clone();
+                if let Some(ref n) = next {
+                    self.unread_worlds.remove(n);
+                }
                 if !quiet {
                     let label = next.as_deref().unwrap_or("none");
                     let world_msg = format!("---- World {label} ----");
@@ -1172,15 +1254,25 @@ impl EventLoop {
                 self.need_refresh = true;
             }
 
-            ScriptAction::Recall(n) => {
-                let entries: Vec<String> = self.input.history.iter_oldest_first()
-                    .map(|s| s.to_owned())
+            ScriptAction::Recall { count, reverse, pattern } => {
+                // Collect output scrollback lines, applying optional pattern filter.
+                let mut entries: Vec<String> = self.screen.iter_lines()
+                    .map(|ll| ll.content.data.clone())
+                    .filter(|text| {
+                        pattern.as_deref()
+                            .map(|p| text.contains(p))
+                            .unwrap_or(true)
+                    })
                     .collect();
-                let total = entries.len();
-                let skip = n.map(|n| total.saturating_sub(n)).unwrap_or(0);
-                for (i, entry) in entries.iter().enumerate().skip(skip) {
-                    let line = format!("[{}] {}", i + 1, entry);
-                    self.screen.push_line(LogicalLine::plain(&line));
+                // Trim to the most-recent `count` lines.
+                if let Some(n) = count {
+                    let skip = entries.len().saturating_sub(n);
+                    entries.drain(..skip);
+                }
+                // Reverse if requested (most recent first).
+                if reverse { entries.reverse(); }
+                for entry in &entries {
+                    self.screen.push_line(LogicalLine::plain(entry));
                 }
                 self.need_refresh = true;
             }
@@ -1204,10 +1296,15 @@ impl EventLoop {
             }
 
             ScriptAction::SaveMacros { path } => {
-                let lines: Vec<String> = self.macro_store.iter()
-                    .filter(|m| !m.invisible)
-                    .map(|m| m.to_def_command())
+                // Mirrors C TF /save: writes /addworld lines then /def lines.
+                let mut lines: Vec<String> = self.worlds.iter()
+                    .map(|w| w.to_addworld())
                     .collect();
+                lines.extend(
+                    self.macro_store.iter()
+                        .filter(|m| !m.invisible)
+                        .map(|m| m.to_def_command())
+                );
                 match path {
                     None => {
                         // No file — print to screen.
@@ -1219,7 +1316,7 @@ impl EventLoop {
                         let content = lines.join("\n") + "\n";
                         match tokio::fs::write(&p, &content).await {
                             Ok(()) => {
-                                let msg = format!("% Saved {} macro(s) to {p}.", lines.len());
+                                let msg = format!("% Saved {} definition(s) to {p}.", lines.len());
                                 self.screen.push_line(LogicalLine::plain(&msg));
                             }
                             Err(e) => {
@@ -1317,6 +1414,10 @@ impl EventLoop {
                             let content = crate::tfstr::TfStr::from_tf_markup(&out);
                             self.screen.push_line(LogicalLine::new(content, Attr::EMPTY));
                         }
+                    }
+                    // Decrement one-shot counter; auto-remove when exhausted.
+                    if ta.shots > 0 {
+                        self.macro_store.decrement_shots(ta.macro_num);
                     }
                 }
 
@@ -1536,6 +1637,10 @@ impl EventLoop {
             NetEvent::Line(bytes) => {
                 let now = Instant::now();
                 self.last_server_data = now;
+                // Track unread background worlds (C TF: active_count).
+                if !is_active {
+                    self.unread_worlds.insert(msg.world.clone());
+                }
                 self.last_data_per_world.insert(msg.world.clone(), now);
                 let text = String::from_utf8_lossy(&bytes).into_owned();
 
@@ -1578,6 +1683,10 @@ impl EventLoop {
                     if let Some(body) = &ta.body {
                         self.run_command(body).await;
                     }
+                    // Decrement one-shot counter; auto-remove when exhausted.
+                    if ta.shots > 0 {
+                        self.macro_store.decrement_shots(ta.macro_num);
+                    }
                 }
 
                 // Fire ACTIVITY (active world) or BGTEXT (background world).
@@ -1608,6 +1717,7 @@ impl EventLoop {
                 let was_active = self.active_world.as_deref() == Some(&msg.world);
                 self.handles.remove(&msg.world);
                 self.world_order.retain(|w| *w != msg.world);
+                self.unread_worlds.remove(&msg.world);
                 if was_active {
                     self.active_world = self.world_order.first().cloned();
                 }
@@ -1623,6 +1733,7 @@ impl EventLoop {
                 // Drop the connection handle so the task is stopped.
                 self.handles.remove(&msg.world);
                 self.world_order.retain(|w| *w != msg.world);
+                self.unread_worlds.remove(&msg.world);
                 let was_active = self.active_world.as_deref() == Some(&msg.world);
                 if was_active {
                     self.active_world = self.world_order.first().cloned();
@@ -1665,6 +1776,10 @@ impl EventLoop {
                         _ => {} // Connect/Disconnect/Send deferred
                     }
                 }
+            }
+            // Decrement one-shot counter; auto-remove when exhausted.
+            if ta.shots > 0 {
+                self.macro_store.decrement_shots(ta.macro_num);
             }
         }
     }
@@ -1842,8 +1957,8 @@ impl EventLoop {
         // Space-separated list of all open world names (for is_open / is_connected).
         let open: String = self.handles.keys().cloned().collect::<Vec<_>>().join(" ");
         self.interp.set_global_var("_open_worlds", crate::script::Value::Str(open));
-        // nactive: all open connections count as active.
-        self.interp.set_global_var("nactive", crate::script::Value::Int(self.handles.len() as i64));
+        // nactive: background worlds with unread output (C TF: active_count).
+        self.interp.set_global_var("nactive", crate::script::Value::Int(self.unread_worlds.len() as i64));
         // nlog: 1 when a log file is open, 0 otherwise.
         let nlog = self.log_file.is_some() as i64;
         self.interp.set_global_var("nlog", crate::script::Value::Int(nlog));
@@ -1979,6 +2094,12 @@ impl EventLoop {
         // status field expressions (e.g. `insert ? "" : "(Over)"`).
         self.sync_kb_globals();
         self.update_status();
+        // Sync more_threshold from %more (C TF: more=1 enables paging at winlines).
+        let more_on = self.interp.get_global_var("more")
+            .map(|v| v.as_bool())
+            .unwrap_or(false);
+        let winlines = self.terminal.output_bottom() as usize;
+        self.screen.more_threshold = if more_on && winlines > 0 { winlines } else { 0 };
         let scrollback = self.screen.scrollback();
         self.interp.set_global_var("moresize", crate::script::Value::Int(scrollback as i64));
         self.interp.set_global_var("columns",  crate::script::Value::Int(self.terminal.width as i64));

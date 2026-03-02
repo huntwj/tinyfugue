@@ -234,6 +234,11 @@ impl Screen {
         self.scrollback
     }
 
+    /// Iterate all logical lines in chronological order (oldest first).
+    pub fn iter_lines(&self) -> impl DoubleEndedIterator<Item = &LogicalLine> {
+        self.lines.iter()
+    }
+
     // ── View access ───────────────────────────────────────────────────────
 
     /// Return the physical lines currently visible in the output window,

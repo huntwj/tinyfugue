@@ -116,6 +116,7 @@ fn split_by_separator(line: &str) -> Vec<String> {
     let mut parts = Vec::new();
     let mut current = String::new();
     let mut in_str = false;
+    let mut brace_depth = 0usize;
     let mut chars = line.chars().peekable();
 
     while let Some(ch) = chars.next() {
@@ -130,7 +131,15 @@ fn split_by_separator(line: &str) -> Vec<String> {
                     current.push(next);
                 }
             }
-            '%' if !in_str => {
+            '{' if !in_str => {
+                brace_depth += 1;
+                current.push(ch);
+            }
+            '}' if !in_str => {
+                brace_depth = brace_depth.saturating_sub(1);
+                current.push(ch);
+            }
+            '%' if !in_str && brace_depth == 0 => {
                 if chars.peek() == Some(&';') {
                     chars.next();
                     parts.push(std::mem::take(&mut current));
@@ -292,7 +301,15 @@ impl StmtParser {
         let tc = terminator.as_deref().map(cmd_name).unwrap_or("endif");
 
         let else_block = if tc == "else" {
-            let blk = self.parse_block_until(Some(&["endif"]))?;
+            // Handle inline body on the /else line: "/else /echo no"
+            let mut blk = Vec::new();
+            if let Some(term_line) = &terminator {
+                let (_, else_inline) = split_cmd(term_line);
+                if !else_inline.is_empty() {
+                    blk.extend(parse_script(else_inline)?);
+                }
+            }
+            blk.extend(self.parse_block_until(Some(&["endif"]))?);
             self.advance(); // consume /endif (or ignore None at EOF)
             blk
         } else if tc == "elseif" {
@@ -312,6 +329,14 @@ impl StmtParser {
     }
 
     fn parse_while(&mut self, rest: &str) -> Result<Stmt, String> {
+        // Inline form: /while (cond) {body}
+        if let Some((cond_part, brace_part)) = split_cond_and_brace_body(rest) {
+            let cond = strip_parens(cond_part.trim()).to_owned();
+            let inner = extract_brace_body(brace_part)?;
+            let body = parse_script(inner)?;
+            return Ok(Stmt::While { cond, body });
+        }
+        // Multi-line form: /while (cond) ... /done
         let cond = strip_parens(rest.trim()).to_owned();
         let body = self.parse_block_until(Some(&["done"]))?;
         self.advance(); // consume /done
@@ -327,7 +352,14 @@ impl StmtParser {
             .ok_or_else(|| format!("missing start in /for {var}"))?;
         let (end, body_str) = split_word(rest)
             .ok_or_else(|| format!("missing end in /for {var}"))?;
-        let body = parse_script(body_str)?;
+        let body_str = body_str.trim();
+        let body = if body_str.starts_with('{') {
+            // Inline brace body: /for i 1 3 {/echo %i}
+            let inner = extract_brace_body(body_str)?;
+            parse_script(inner)?
+        } else {
+            parse_script(body_str)?
+        };
         Ok(Stmt::For {
             var: var.to_owned(),
             start: start.to_owned(),
@@ -361,6 +393,42 @@ fn strip_parens(s: &str) -> &str {
     } else {
         s
     }
+}
+
+/// Extract the content of a `{...}` brace body, returning the inner text.
+///
+/// Handles balanced inner braces.  `s` must start with `{` and end with `}`.
+fn extract_brace_body(s: &str) -> Result<&str, String> {
+    let s = s.trim();
+    if !s.starts_with('{') || !s.ends_with('}') {
+        return Err(format!("expected {{...}} body, got: {s}"));
+    }
+    Ok(&s[1..s.len() - 1])
+}
+
+/// If `rest` has an inline `{...}` body (i.e. ends with `}`), split it into
+/// `(condition_part, brace_block_str)`.  Returns `None` if there is no inline
+/// brace body (multi-line `/done`-terminated form).
+fn split_cond_and_brace_body(rest: &str) -> Option<(&str, &str)> {
+    let rest = rest.trim();
+    if !rest.ends_with('}') {
+        return None;
+    }
+    // Find the opening `{` at paren-depth == 0 (not inside `(...)` or strings).
+    let mut paren_depth = 0i32;
+    let mut in_str = false;
+    for (i, ch) in rest.char_indices() {
+        match ch {
+            '"' | '\'' => in_str = !in_str,
+            '(' if !in_str => paren_depth += 1,
+            ')' if !in_str => paren_depth -= 1,
+            '{' if !in_str && paren_depth == 0 => {
+                return Some((&rest[..i], &rest[i..]));
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Split a `/if` or `/elseif` argument into `(condition, inline_body)`.

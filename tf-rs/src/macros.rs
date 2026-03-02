@@ -219,7 +219,8 @@ impl Macro {
 /// The caller (the event loop, once built) is responsible for:
 /// * suppressing display when `gag` is `true`,
 /// * merging `attr` into the line's display attributes,
-/// * executing `body` through the script interpreter.
+/// * executing `body` through the script interpreter,
+/// * calling [`MacroStore::decrement_shots`] when `shots > 0`.
 #[derive(Debug, Clone)]
 pub struct TriggerAction {
     /// The line should be suppressed.
@@ -230,6 +231,10 @@ pub struct TriggerAction {
     pub body: Option<String>,
     /// Name or `#num` label (for diagnostics / mecho output).
     pub label: String,
+    /// Macro number — needed to decrement the shot counter.
+    pub macro_num: u32,
+    /// Remaining shots (`0` = unlimited).
+    pub shots: u32,
 }
 
 // ── MacroStore ────────────────────────────────────────────────────────────────
@@ -363,6 +368,28 @@ impl MacroStore {
     /// Iterate over all macros (unordered).
     pub fn iter(&self) -> impl Iterator<Item = &Macro> {
         self.macros.values()
+    }
+
+    /// Decrement the shot counter for macro `num`.
+    ///
+    /// A counter of `0` means unlimited — this method is a no-op in that case.
+    /// When the counter reaches `0` after decrementing, the macro is removed
+    /// automatically (C TF behaviour: `-c N` creates a "one-shot" trigger).
+    ///
+    /// Returns `true` if the macro was removed (shots exhausted).
+    pub fn decrement_shots(&mut self, num: u32) -> bool {
+        let Some(mac) = self.macros.get_mut(&num) else {
+            return false;
+        };
+        if mac.shots == 0 {
+            return false; // unlimited
+        }
+        mac.shots -= 1;
+        if mac.shots == 0 {
+            self.remove_by_num(num);
+            return true;
+        }
+        false
     }
 
     // ── Trigger matching ──────────────────────────────────────────────────────
@@ -503,6 +530,8 @@ fn action_from(mac: &Macro) -> TriggerAction {
             .name
             .clone()
             .unwrap_or_else(|| format!("#{}", mac.num)),
+        macro_num: mac.num,
+        shots: mac.shots,
     }
 }
 
@@ -816,5 +845,46 @@ mod tests {
             let actions = store.find_triggers("a dragon appears", None);
             assert!(actions.is_empty(), "prob=0 macro fired unexpectedly");
         }
+    }
+
+    // ── decrement_shots ───────────────────────────────────────────────────────
+
+    #[test]
+    fn shots_unlimited_not_decremented() {
+        let mut store = MacroStore::new();
+        let m = trig_macro("hello", 1, false, "/echo hi"); // shots == 0 (unlimited)
+        let num = store.add(m);
+        assert!(!store.decrement_shots(num)); // no-op, returns false
+        assert!(store.get(num).is_some());    // macro still present
+    }
+
+    #[test]
+    fn shots_2_fires_twice_then_removed() {
+        let mut store = MacroStore::new();
+        let mut m = trig_macro("hello", 1, false, "/echo hi");
+        m.shots = 2;
+        let num = store.add(m);
+
+        // First fire — shots goes from 2 → 1, macro survives.
+        assert!(!store.decrement_shots(num));
+        assert!(store.get(num).is_some());
+        assert_eq!(store.get(num).unwrap().shots, 1);
+
+        // Second fire — shots goes from 1 → 0, macro is removed.
+        assert!(store.decrement_shots(num));
+        assert!(store.get(num).is_none());
+        assert!(store.trig_list.is_empty());
+    }
+
+    #[test]
+    fn shots_reflected_in_trigger_action() {
+        let mut store = MacroStore::new();
+        let mut m = trig_macro("ping", 1, false, "/echo pong");
+        m.shots = 3;
+        store.add(m);
+
+        let actions = store.find_triggers("ping", None);
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].shots, 3);
     }
 }
