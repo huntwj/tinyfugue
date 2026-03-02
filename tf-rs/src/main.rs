@@ -173,9 +173,10 @@ async fn main() {
             }
         }
     } else {
-        let msg = "---- No world ----";
-        event_loop.push_output(msg);
-        event_loop.fire_hook(Hook::World, msg).await;
+        // No world to connect to: fire the World hook so status fields
+        // (e.g. @world → "(no world)") update correctly.  C TF does not
+        // print any screen line here.
+        event_loop.fire_hook(Hook::World, "").await;
     }
 
     // ── Enter main loop ───────────────────────────────────────────────────────

@@ -1322,11 +1322,9 @@ impl EventLoop {
         };
         let Some(w) = world else {
             if name.is_empty() {
-                // No worlds defined at all: mirrors C TF's "---- No world ----"
-                // + H_WORLD hook when there is nothing to connect to.
-                let msg = "---- No world ----";
-                self.screen.push_line(LogicalLine::plain(msg));
-                self.fire_hook(Hook::World, msg).await;
+                // No worlds defined: fire the World hook (updates status bar)
+                // but do not print a screen line — C TF does not do so either.
+                self.fire_hook(Hook::World, "").await;
             } else {
                 let msg = format!("% Unknown world '{name}'");
                 self.screen.push_line(LogicalLine::plain(&msg));
