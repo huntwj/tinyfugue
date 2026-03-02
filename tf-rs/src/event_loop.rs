@@ -1389,35 +1389,74 @@ impl EventLoop {
             self.need_refresh = true;
             return;
         };
-        let port: u16 = w.port.as_deref().unwrap_or("23").parse().unwrap_or(23);
+        let world_host = host.to_owned();
+        let world_port_str = w.port.as_deref().unwrap_or("23").to_owned();
+        let port: u16 = world_port_str.parse().unwrap_or(23);
+        let world_name = w.name.clone();
+        let world_char = w.character.clone().unwrap_or_default();
         // Capture credentials before w is consumed by connect().
         let credentials = match (&w.character, &w.pass) {
             (Some(ch), Some(pw)) => Some((ch.clone(), pw.clone())),
             _ => None,
         };
-        let result = if w.flags.ssl {
-            self.connect_tls(&w.name, host, port).await
+
+        // Check proxy settings: read global vars before any mutable borrow.
+        let proxy_host = self.interp.get_global_var("proxy_host")
+            .map(|v| v.to_string())
+            .filter(|s| !s.is_empty());
+        let use_proxy = proxy_host.is_some() && !w.flags.no_proxy;
+        let (connect_host, connect_port): (String, u16) = if use_proxy {
+            let ph = proxy_host.unwrap();
+            let pp: u16 = self.interp.get_global_var("proxy_port")
+                .map(|v| v.to_string())
+                .filter(|s| !s.is_empty())
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(23);
+            (ph, pp)
         } else {
-            self.connect(&w.name, host, port).await
+            (world_host.clone(), port)
+        };
+
+        let result = if w.flags.ssl {
+            self.connect_tls(&world_name, &connect_host, connect_port).await
+        } else {
+            self.connect(&world_name, &connect_host, connect_port).await
         };
         match result {
             Ok(()) => {
-                let world_name = w.name.clone();
+                // Set world_* variables so hook bodies can expand ${world_host} etc.
+                // (Mirrors C TF's world_info() lookup via macro_body() "world_" prefix.)
+                self.interp.set_global_var("world_name",      crate::script::Value::Str(world_name.clone()));
+                self.interp.set_global_var("world_host",      crate::script::Value::Str(world_host));
+                self.interp.set_global_var("world_port",      crate::script::Value::Str(world_port_str));
+                self.interp.set_global_var("world_character", crate::script::Value::Str(world_char));
+                self.interp.set_global_var("world_login",     crate::script::Value::Int((!self.no_autologin) as i64));
+
                 self.update_status();
-                self.fire_hook(Hook::Connect, &world_name).await;
+
+                if use_proxy {
+                    // Proxy path: fire H_PROXY with the world name.
+                    // stdlib.tf's proxy_hook sends "telnet ${world_host} ${world_port}"
+                    // to the proxy server, then does /trigger -hCONNECT and -hLOGIN
+                    // itself — so we do NOT fire Hook::Connect or Hook::Login here.
+                    self.fire_hook(Hook::Proxy, &world_name).await;
+                } else {
+                    self.fire_hook(Hook::Connect, &world_name).await;
+                    // Fire LOGIN hook if autologin is enabled and world has credentials.
+                    if !self.no_autologin {
+                        if let Some((character, password)) = credentials {
+                            let login_args = format!("{world_name} {character} {password}");
+                            self.fire_hook(Hook::Login, &login_args).await;
+                        }
+                    }
+                }
+
                 // Fire WORLD hook and push the "---- World X ----" divider
                 // (mirrors C TF's world_hook() call in socket.c).
                 let world_msg = format!("---- World {world_name} ----");
                 self.screen.push_line(LogicalLine::plain(&world_msg));
                 self.fire_hook(Hook::World, &world_msg).await;
-                // Fire LOGIN hook if autologin is enabled and world has credentials
-                // (mirrors C TF socket.c:2168-2172; controlled by `-l` flag).
-                if !self.no_autologin {
-                    if let Some((character, password)) = credentials {
-                        let login_args = format!("{world_name} {character} {password}");
-                        self.fire_hook(Hook::Login, &login_args).await;
-                    }
-                }
+
                 self.need_refresh = true;
             }
             Err(e) => {
