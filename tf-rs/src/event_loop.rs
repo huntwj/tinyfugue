@@ -382,6 +382,11 @@ pub struct EventLoop {
     /// `-q` flag: quiet login — suppress initial server output after auto-connect.
     /// Sets `%quiet=1` in the interpreter; `numquiet` line-suppression not yet implemented.
     pub quiet_login: bool,
+
+    /// Prompt string set by the `prompt()` TF function or by server PROMPT events.
+    /// Displayed to the left of the editable input buffer (not editable itself).
+    /// Mirrors C TF's `sock->prompt` / `update_prompt()`.
+    input_prompt: String,
 }
 
 impl EventLoop {
@@ -422,6 +427,7 @@ impl EventLoop {
             last_data_per_world: HashMap::new(),
             no_autologin: false,
             quiet_login: false,
+            input_prompt: String::new(),
         }
     }
 
@@ -643,8 +649,8 @@ impl EventLoop {
                             // input line so the user sees their typing.
                             self.sync_kb_globals();
                             let pos  = self.input.editor.pos;
-                            let text = self.input.editor.text();
-                            let _ = self.terminal.render_input(&text, pos);
+                            let text = format!("{}{}", self.input_prompt, self.input.editor.text());
+                            let _ = self.terminal.render_input(&text, pos + self.input_prompt.chars().count());
                             let _ = self.terminal.flush();
                         }
                     }
@@ -1363,6 +1369,12 @@ impl EventLoop {
                 // Used by stdlib.tf's proxy_command after sending the proxy connect string.
                 self.fire_hook(hook, &args).await;
             }
+
+            ScriptAction::SetPrompt(text) => {
+                // prompt(text) — set the string shown left of the editable input buffer.
+                self.input_prompt = text;
+                self.need_refresh = true;
+            }
         }
     }
 
@@ -1936,8 +1948,9 @@ impl EventLoop {
         if self.screen.paused {
             let _ = self.terminal.show_more_prompt();
         }
-        let text = self.input.editor.text();
-        let pos  = self.input.editor.pos;
+        let prompt_len = self.input_prompt.chars().count();
+        let text = format!("{}{}", self.input_prompt, self.input.editor.text());
+        let pos  = self.input.editor.pos + prompt_len;
         let _ = self.terminal.render_input(&text, pos);
         let _ = self.terminal.flush();
     }

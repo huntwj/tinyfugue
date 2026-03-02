@@ -137,6 +137,9 @@ pub enum ScriptAction {
     /// Fire a hook directly at runtime (`/trigger -hHOOK args`).
     /// Mirrors C TF's `do_hook()` call from `handle_trigger_command`.
     FireHook { hook: Hook, args: String },
+    /// Set the prompt string shown left of the input buffer (`prompt(text)`).
+    /// Mirrors C TF's `update_prompt()` / `sock->prompt`.
+    SetPrompt(String),
     /// Add a line to the input history (`/recordline line`).
     RecordLine(String),
     /// Set the watchdog interval in seconds (0 = disable) (`/watchdog [n]`).
@@ -2043,7 +2046,7 @@ impl Interpreter {
     /// `prompt(text[, attr[, pageable]])` — set the input-line prompt text.
     fn builtin_prompt_fn(&mut self, args: &[Value]) -> Result<Value, String> {
         let text = args.first().map(|v| v.as_str()).unwrap_or_default();
-        self.output.push(format!("[prompt] {text}"));
+        self.actions.push(ScriptAction::SetPrompt(text));
         Ok(Value::Int(1))
     }
 
