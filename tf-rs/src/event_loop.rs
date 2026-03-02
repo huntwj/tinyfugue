@@ -1535,7 +1535,11 @@ impl EventLoop {
                 let actions = self.macro_store.find_triggers(&text, world_filter);
 
                 // Determine gag and merged attr from trigger actions.
-                let gagged = actions.iter().any(|a| a.gag);
+                // Also honour the global %gag variable (/gag sets gag=1).
+                let global_gag = self.interp.get_global_var("gag")
+                    .map(|v| v.as_bool())
+                    .unwrap_or(false);
+                let gagged = global_gag || actions.iter().any(|a| a.gag);
                 let merged_attr = actions.iter().fold(Attr::EMPTY, |acc, a| acc | a.attr);
 
                 if !gagged {
