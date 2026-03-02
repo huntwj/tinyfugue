@@ -476,6 +476,15 @@ impl Parser {
     fn parse_ternary(&mut self) -> Result<Expr, String> {
         let cond = self.parse_or()?;
         if self.eat(&Token::Question) {
+            // Elvis operator: expr?: default  (then == cond, evaluated once)
+            if self.eat(&Token::Colon) {
+                let else_ = self.parse_ternary()?;
+                return Ok(Expr::Ternary(
+                    Box::new(cond.clone()),
+                    Box::new(cond),
+                    Box::new(else_),
+                ));
+            }
             let then = self.parse_or()?;
             if !self.eat(&Token::Colon) {
                 return Err("expected ':' in ternary".into());
@@ -1046,6 +1055,27 @@ mod tests {
     fn precedence() {
         assert_eq!(eval("2 + 3 * 4"), Value::Int(14));
         assert_eq!(eval("(2 + 3) * 4"), Value::Int(20));
+    }
+
+    #[test]
+    fn ternary_and_elvis() {
+        assert_eq!(eval("1 ? 2 : 3"), Value::Int(2));
+        assert_eq!(eval("0 ? 2 : 3"), Value::Int(3));
+        // Elvis: expr?: default — uses expr when truthy, default when falsy
+        assert_eq!(eval("5?: 99"), Value::Int(5));
+        assert_eq!(eval("0?: 99"), Value::Int(99));
+        let mut ctx = TestCtx::new().with("kbnum", Value::Int(0));
+        assert_eq!(
+            eval_ctx("kbnum?:1", &mut ctx),
+            Value::Int(1),
+            "kbnum=0 should give default 1"
+        );
+        let mut ctx = TestCtx::new().with("kbnum", Value::Int(3));
+        assert_eq!(
+            eval_ctx("kbnum?:1", &mut ctx),
+            Value::Int(3),
+            "kbnum=3 should give 3"
+        );
     }
 
     #[test]
