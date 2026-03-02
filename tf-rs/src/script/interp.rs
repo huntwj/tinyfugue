@@ -1953,12 +1953,12 @@ impl EvalContext for Interpreter {
                 return Ok(self.globals.get("nlog").cloned().unwrap_or(Value::Int(0)));
             }
             "nmail" => {
-                // Mail checking not implemented; return safe default.
-                return Ok(Value::Int(0));
+                // New-mail count: read from global synced by the event loop mail checker.
+                return Ok(self.globals.get("nmail").cloned().unwrap_or(Value::Int(0)));
             }
             "nread" => {
-                // Unread-mail count not implemented; return safe default.
-                return Ok(Value::Int(0));
+                // Unread-mail count: read from global (always 0 until mail reading is impl).
+                return Ok(self.globals.get("nread").cloned().unwrap_or(Value::Int(0)));
             }
 
             // ── Server injection ───────────────────────────────────────────────
@@ -1974,6 +1974,13 @@ impl EvalContext for Interpreter {
                 };
                 let flags = args.get(2).map(|v| v.to_string()).unwrap_or_default();
                 let no_newline = flags.contains('u');
+                // "h" flag: fire SEND hook after sending (mirrors C TF expr.c send()).
+                if flags.contains('h') {
+                    self.actions.push(ScriptAction::FireHook {
+                        hook: crate::hook::Hook::Send,
+                        args: text.clone(),
+                    });
+                }
                 self.actions.push(ScriptAction::SendToWorld { text, world, no_newline });
                 return Ok(Value::Int(1));
             }
