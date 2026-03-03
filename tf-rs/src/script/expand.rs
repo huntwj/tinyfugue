@@ -100,15 +100,25 @@ pub fn expand(src: &str, ctx: &mut dyn EvalContext) -> Result<String, String> {
                     Some('P') => {
                         chars.next(); // consume 'P'
                         // %P alone = current command/procedure name.
-                        // %P0, %P1, … = regex capture groups (variable lookup).
-                        if matches!(chars.peek(), Some(c) if c.is_ascii_digit()) {
-                            let mut name = String::from('P');
-                            while matches!(chars.peek(), Some(c) if is_ident_continue(*c)) {
-                                name.push(chars.next().unwrap());
+                        // %P0, %P1, … = regex capture groups.
+                        // %PL = text before last match; %PR = text after last match.
+                        match chars.peek().copied() {
+                            Some(c) if c.is_ascii_digit() => {
+                                let mut name = String::from('P');
+                                while matches!(chars.peek(), Some(c) if is_ident_continue(*c)) {
+                                    name.push(chars.next().unwrap());
+                                }
+                                out.push_str(&lookup_var(&name, ctx));
                             }
-                            out.push_str(&lookup_var(&name, ctx));
-                        } else {
-                            out.push_str(ctx.current_cmd_name());
+                            Some('L') => {
+                                chars.next();
+                                out.push_str(&lookup_var("PL", ctx));
+                            }
+                            Some('R') => {
+                                chars.next();
+                                out.push_str(&lookup_var("PR", ctx));
+                            }
+                            _ => out.push_str(ctx.current_cmd_name()),
                         }
                     }
                     Some('L') => {
@@ -161,13 +171,26 @@ pub fn expand(src: &str, ctx: &mut dyn EvalContext) -> Result<String, String> {
                         );
                     }
                     Some(c) if is_ident_start(c) => {
-                        // %name — bare variable name
+                        // %name — bare variable name (or special %R for random param)
                         chars.next();
                         let mut name = String::from(c);
                         while matches!(chars.peek(), Some(nc) if is_ident_continue(*nc)) {
                             name.push(chars.next().unwrap());
                         }
-                        out.push_str(&lookup_var(&name, ctx));
+                        if name == "R" {
+                            // %R = random positional parameter (C: OP_APARM_RND)
+                            let params = ctx.positional_params().to_vec();
+                            if !params.is_empty() {
+                                // Simple runtime random via SystemTime nanoseconds
+                                let ns = std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .subsec_nanos() as usize;
+                                out.push_str(&params[ns % params.len()]);
+                            }
+                        } else {
+                            out.push_str(&lookup_var(&name, ctx));
+                        }
                     }
                     _ => {
                         // Literal '%'

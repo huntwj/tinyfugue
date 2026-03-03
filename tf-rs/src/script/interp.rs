@@ -2081,6 +2081,9 @@ impl EvalContext for Interpreter {
                 match Pattern::new(&pat, MatchMode::Regexp) {
                     Ok(pattern) => {
                         if let Some(caps) = pattern.find(&text) {
+                            // %PL = text before match, %PR = text after match (C: regsubstr -1/-2)
+                            self.set_global("PL", Value::Str(caps.left().to_owned()));
+                            self.set_global("PR", Value::Str(caps.right().to_owned()));
                             self.set_global("P0", Value::Str(caps.whole().to_owned()));
                             for n in 1..=caps.group_count() {
                                 let key = format!("P{n}");
@@ -2089,6 +2092,8 @@ impl EvalContext for Interpreter {
                             }
                             return Ok(Value::Int(1));
                         } else {
+                            self.set_global("PL", Value::Str(String::new()));
+                            self.set_global("PR", Value::Str(String::new()));
                             self.set_global("P0", Value::Str(String::new()));
                             return Ok(Value::Int(0));
                         }

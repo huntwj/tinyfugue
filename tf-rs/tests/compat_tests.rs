@@ -347,6 +347,17 @@ fn regmatch_capture_groups() {
 }
 
 #[test]
+fn regmatch_pl_pr() {
+    // %PL = text before match, %PR = text after match
+    check(
+        r#"/test regmatch("world", "hello world, bye")
+/echo %PL
+/echo %PR"#,
+        &["hello", ", bye"],
+    );
+}
+
+#[test]
 fn eval_command() {
     check(
         r#"/set cmd=echo
