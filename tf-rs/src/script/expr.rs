@@ -110,6 +110,8 @@ pub enum Token {
     RParen,
     /// `{content}` — brace-form positional param or variable reference in expressions.
     BraceRef(String),
+    /// `$(cmd)` — command substitution: capture echo output of `cmd`.
+    CmdSub(String),
     /// Unrecognised input byte — reported as a diagnostic instead of masking as EOF.
     Unknown(char),
     Eof,
@@ -359,6 +361,30 @@ impl<'a> Lexer<'a> {
                 }
                 Token::BraceRef(inner)
             }
+            b'$' => {
+                // $(...) — command substitution inside an expression.
+                // Scan until the matching ')' (tracking nesting depth).
+                if self.peek() == Some(b'(') {
+                    self.pos += 1; // consume '('
+                    let mut cmd = String::new();
+                    let mut depth = 1usize;
+                    loop {
+                        match self.advance() {
+                            None => break,
+                            Some(b'(') => { depth += 1; cmd.push('('); }
+                            Some(b')') => {
+                                depth -= 1;
+                                if depth == 0 { break; }
+                                cmd.push(')');
+                            }
+                            Some(c) => cmd.push(c as char),
+                        }
+                    }
+                    Token::CmdSub(cmd)
+                } else {
+                    Token::Unknown('$')
+                }
+            }
             c => Token::Unknown(c as char),
         }
     }
@@ -431,12 +457,16 @@ pub enum Expr {
     Positional(usize),
     /// `{*}` — all positional parameters joined with space.
     AllParams,
+    /// `{#}` — count of positional parameters.
+    ParamsCount,
     Unary(UnaryOp, Box<Expr>),
     Binary(BinOp, Box<Expr>, Box<Expr>),
     Ternary(Box<Expr>, Box<Expr>, Box<Expr>),
     Assign(String, AssignOp, Box<Expr>),
     Call(String, Vec<Expr>),
     Comma(Vec<Expr>),
+    /// `$(cmd)` — execute `cmd` and substitute its echo output.
+    CmdSub(String),
 }
 
 // ── Parser ────────────────────────────────────────────────────────────────────
@@ -720,6 +750,9 @@ impl Parser {
                     Ok(Expr::Positional(inner.parse().unwrap_or(0)))
                 } else if inner == "*" {
                     Ok(Expr::AllParams)
+                } else if inner == "#" {
+                    // {#} — count of positional params (same as %# in text expansion)
+                    Ok(Expr::ParamsCount)
                 } else {
                     // {name} or {name-default} — variable reference
                     // Strip trailing default (after '-')
@@ -727,6 +760,9 @@ impl Parser {
                     Ok(Expr::Var(varname))
                 }
             }
+            // $(...) — command substitution: value is the captured echo output.
+            // Deferred to eval time via Expr::CmdSub so the parser stays pure.
+            Token::CmdSub(cmd) => Ok(Expr::CmdSub(cmd)),
             other => Err(format!("unexpected token {other:?}")),
         }
     }
@@ -758,6 +794,10 @@ pub fn eval_expr(expr: &Expr, ctx: &mut dyn EvalContext) -> Result<Value, String
 
         Expr::AllParams => {
             Ok(Value::Str(ctx.positional_params().join(" ")))
+        }
+
+        Expr::ParamsCount => {
+            Ok(Value::Int(ctx.positional_params().len() as i64))
         }
 
         Expr::Unary(op, inner) => {
@@ -837,6 +877,14 @@ pub fn eval_expr(expr: &Expr, ctx: &mut dyn EvalContext) -> Result<Value, String
                 last = eval_expr(e, ctx)?;
             }
             Ok(last)
+        }
+
+        Expr::CmdSub(cmd) => {
+            // Execute the command and capture its echo output (mirrors C TF
+            // OP_CMDSUB / OP_ACMDSUB: tfout is redirected to a queue; the
+            // captured lines are joined with spaces as the substitution value).
+            let captured = ctx.exec_and_capture(cmd)?;
+            Ok(Value::Str(captured))
         }
     }
 }

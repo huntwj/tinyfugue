@@ -483,3 +483,28 @@ fn cmd_substitution_in_set() {
         &["10"],
     );
 }
+
+#[test]
+fn cmd_substitution_in_expr() {
+    // $(...) inside a $[...] expression — tests the expr-level CmdSub token.
+    // This exercises the lisp.tf /unique pattern:
+    //   $[{#}>1 ? $(/macro ...) : "fallback"]
+    // The inner command's echo must be captured as the ternary result.
+    check(
+        r#"/def getval = /echo 42
+/def testit = /echo $[{#}>0 ? $(/getval) : "none"]
+/testit arg"#,
+        &["42"],
+    );
+}
+
+#[test]
+fn cmd_substitution_in_expr_fallback() {
+    // Same pattern but with zero args — verifies the else branch still works.
+    check(
+        r#"/def getval = /echo 42
+/def testit = /echo $[{#}>0 ? $(/getval) : "none"]
+/testit"#,
+        &["none"],
+    );
+}
