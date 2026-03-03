@@ -111,6 +111,11 @@ fn normalise_output(raw: &str) -> Vec<String> {
             // C TF also prints "Ingwar …" / "Using PCRE …" build info.
             && !l.starts_with("Ingwar")
             && !l.starts_with("Using PCRE")
+            // C TF Copyright and Ingwar lines may wrap; filter continuation lines.
+            && !l.contains("Ken Keys")
+            && !l.contains("kenkeys@")
+            // Build-tag continuation line: "+ATCP +GMCP +option102 …"
+            && !(l.starts_with('+') && l.contains("ATCP"))
         })
         .collect()
 }
@@ -456,10 +461,13 @@ fn cmd_substitution_basic() {
     // $(/cmd) captures the echo output of a command as a string value.
     // The inner command's echo is redirected to a capture buffer (not the
     // screen) — mirrors C TF OP_CMDSUB / OP_ACMDSUB behaviour.
+    // NOTE: C TF only expands $(...) inside macro bodies (SUB_MACRO level),
+    // not in top-level stdin commands.  Both cases work in our Rust binary.
     // Used heavily in lisp.tf (/length, /car, /cdr, /unique, /remove).
     check(
         r#"/def myecho = /echo hello
-/echo result=$(/myecho)"#,
+/def testit = /echo result=$(/myecho)
+/testit"#,
         &["result=hello"],
     );
 }
@@ -467,10 +475,11 @@ fn cmd_substitution_basic() {
 #[test]
 fn cmd_substitution_in_set() {
     // $(/cmd) on the right-hand side of /set; inner echo is captured.
+    // Test inside a macro body so C TF comparison also works.
     check(
         r#"/def double = /echo $[{1} * 2]
-/set x=$(/double 5)
-/echo %x"#,
+/def testit = /set x=$(/double 5)%; /echo %x
+/testit"#,
         &["10"],
     );
 }
