@@ -237,6 +237,29 @@ pub fn expand(src: &str, ctx: &mut dyn EvalContext) -> Result<String, String> {
                         let name = read_brace_name(&mut chars)?;
                         out.push_str(&resolve_brace(name, ctx));
                     }
+                    Some('(') => {
+                        // $(...) — command substitution.
+                        // Mirrors C TF expand.c cmdsub(): runs the enclosed command
+                        // with output redirected to a capture buffer; the captured
+                        // lines are joined with spaces and substituted inline.
+                        // The inner command's echo does NOT appear on screen.
+                        chars.next(); // consume '('
+                        let mut cmd_src = String::new();
+                        let mut depth = 1usize;
+                        for ec in chars.by_ref() {
+                            match ec {
+                                '(' => { depth += 1; cmd_src.push(ec); }
+                                ')' => {
+                                    depth -= 1;
+                                    if depth == 0 { break; }
+                                    cmd_src.push(ec);
+                                }
+                                _ => cmd_src.push(ec),
+                            }
+                        }
+                        let captured = ctx.exec_and_capture(&cmd_src)?;
+                        out.push_str(&captured);
+                    }
                     Some('$') => {
                         // $$ — escaped dollar sign
                         chars.next(); // consume second '$'

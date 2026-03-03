@@ -448,3 +448,29 @@ fn regmatch_from_helpfile() {
         &["bar"],
     );
 }
+
+// ── Command substitution $(...) ───────────────────────────────────────────────
+
+#[test]
+fn cmd_substitution_basic() {
+    // $(/cmd) captures the echo output of a command as a string value.
+    // The inner command's echo is redirected to a capture buffer (not the
+    // screen) — mirrors C TF OP_CMDSUB / OP_ACMDSUB behaviour.
+    // Used heavily in lisp.tf (/length, /car, /cdr, /unique, /remove).
+    check(
+        r#"/def myecho = /echo hello
+/echo result=$(/myecho)"#,
+        &["result=hello"],
+    );
+}
+
+#[test]
+fn cmd_substitution_in_set() {
+    // $(/cmd) on the right-hand side of /set; inner echo is captured.
+    check(
+        r#"/def double = /echo $[{1} * 2]
+/set x=$(/double 5)
+/echo %x"#,
+        &["10"],
+    );
+}

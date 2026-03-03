@@ -2125,6 +2125,16 @@ impl EvalContext for Interpreter {
     fn eval_expr_str(&mut self, s: &str) -> Result<Value, String> {
         eval_str(s, self)
     }
+
+    fn exec_and_capture(&mut self, cmd: &str) -> Result<String, String> {
+        // Redirect echo output to a capture buffer (mirrors C TF OP_CMDSUB /
+        // OP_ACMDSUB: tfout is replaced with a queue, inner output goes there
+        // instead of the screen, then lines are joined with spaces on close).
+        let saved_output = std::mem::take(&mut self.output);
+        let _ = self.exec_script(cmd);
+        let captured = std::mem::replace(&mut self.output, saved_output);
+        Ok(captured.join(" "))
+    }
 }
 
 // ── Interpreter-aware builtin functions ────────────────────────────────────

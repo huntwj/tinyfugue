@@ -39,6 +39,18 @@ pub trait EvalContext {
 
     /// Evaluate a string as a TF expression (used by `$[...]`).
     fn eval_expr_str(&mut self, s: &str) -> Result<Value, String>;
+
+    /// Execute a command string and capture its echo output (for `$(...)` substitution).
+    ///
+    /// Mirrors C TF `expand.c` `cmdsub()` / `OP_CMDSUB`: the inner command's output
+    /// is redirected to a capture buffer (not displayed), and the captured lines are
+    /// joined with spaces and returned as the substitution value.
+    ///
+    /// Default implementation returns empty string (used by `SimpleCtx` / tests).
+    fn exec_and_capture(&mut self, cmd: &str) -> Result<String, String> {
+        let _ = cmd;
+        Ok(String::new())
+    }
 }
 
 // ── Token ─────────────────────────────────────────────────────────────────────
