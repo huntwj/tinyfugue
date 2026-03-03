@@ -96,6 +96,8 @@ pub enum Token {
     Dot,
     LParen,
     RParen,
+    /// `{content}` — brace-form positional param or variable reference in expressions.
+    BraceRef(String),
     /// Unrecognised input byte — reported as a diagnostic instead of masking as EOF.
     Unknown(char),
     Eof,
@@ -333,6 +335,18 @@ impl<'a> Lexer<'a> {
             b'.' => Token::Dot,
             b'(' => Token::LParen,
             b')' => Token::RParen,
+            b'{' => {
+                // {N} positional param or {name} variable reference inside expressions.
+                let mut inner = String::new();
+                loop {
+                    match self.advance() {
+                        None | Some(b'\n') => break,
+                        Some(b'}') => break,
+                        Some(c) => inner.push(c as char),
+                    }
+                }
+                Token::BraceRef(inner)
+            }
             c => Token::Unknown(c as char),
         }
     }
@@ -401,6 +415,10 @@ pub enum AssignOp {
 pub enum Expr {
     Literal(Value),
     Var(String),
+    /// `{N}` — 1-based positional parameter (same as `%N` in text expansion).
+    Positional(usize),
+    /// `{*}` — all positional parameters joined with space.
+    AllParams,
     Unary(UnaryOp, Box<Expr>),
     Binary(BinOp, Box<Expr>, Box<Expr>),
     Ternary(Box<Expr>, Box<Expr>, Box<Expr>),
@@ -682,6 +700,21 @@ impl Parser {
                     _ => Err("expected variable name after '%'".into()),
                 }
             }
+            // {N} or {name} — brace-form positional param or variable in expressions.
+            // e.g. $[{1} * {1}] — like %1 but brace-delimited.
+            Token::BraceRef(inner) => {
+                if inner.chars().all(|c| c.is_ascii_digit()) {
+                    // {N} — positional param N (1-based)
+                    Ok(Expr::Positional(inner.parse().unwrap_or(0)))
+                } else if inner == "*" {
+                    Ok(Expr::AllParams)
+                } else {
+                    // {name} or {name-default} — variable reference
+                    // Strip trailing default (after '-')
+                    let varname = inner.split('-').next().unwrap_or(&inner).to_owned();
+                    Ok(Expr::Var(varname))
+                }
+            }
             other => Err(format!("unexpected token {other:?}")),
         }
     }
@@ -703,6 +736,17 @@ pub fn eval_expr(expr: &Expr, ctx: &mut dyn EvalContext) -> Result<Value, String
         Expr::Literal(v) => Ok(v.clone()),
 
         Expr::Var(name) => Ok(ctx.get_var(name).unwrap_or_default()),
+
+        Expr::Positional(n) => {
+            let params = ctx.positional_params();
+            Ok(Value::Str(
+                params.get(n.saturating_sub(1)).cloned().unwrap_or_default(),
+            ))
+        }
+
+        Expr::AllParams => {
+            Ok(Value::Str(ctx.positional_params().join(" ")))
+        }
 
         Expr::Unary(op, inner) => {
             let v = eval_expr(inner, ctx)?;

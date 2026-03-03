@@ -365,3 +365,86 @@ fn eval_command() {
         &["hello from eval"],
     );
 }
+
+// ── Help-file examples ────────────────────────────────────────────────────────
+
+#[test]
+fn builtin_strlen() {
+    check(r#"/echo $[strlen("hello")]"#, &["5"]);
+}
+
+#[test]
+fn builtin_substr() {
+    check(r#"/echo $[substr("hello", 0, 1)]"#, &["h"]);
+    check(r#"/echo $[substr("hello", 2)]"#, &["llo"]);
+}
+
+#[test]
+fn builtin_toupper_tolower() {
+    check(r#"/echo $[toupper("TinyFugue")]"#, &["TINYFUGUE"]);
+    check(r#"/echo $[tolower("TinyFugue")]"#, &["tinyfugue"]);
+}
+
+#[test]
+fn builtin_ascii_char() {
+    check(r#"/echo $[ascii("A")]"#, &["65"]);
+    check(r#"/echo $[char(65)]"#, &["A"]);
+}
+
+#[test]
+fn builtin_abs() {
+    check(r#"/echo $[abs(-42)]"#, &["42"]);
+}
+
+#[test]
+fn builtin_pow_sqrt() {
+    check(r#"/echo $[pow(5,2)]"#, &["25"]);
+    check(r#"/echo $[sqrt(16)]"#, &["4"]);
+}
+
+#[test]
+fn builtin_mod() {
+    check(r#"/echo $[mod(17,5)]"#, &["2"]);
+}
+
+#[test]
+fn builtin_strcmp_strchr() {
+    check(r#"/echo $[strcmp("apple","apple")]"#, &["0"]);
+    check(r#"/echo $[strcmp("a","b")]"#, &["-1"]);
+    check(r#"/echo $[strchr("hello","l")]"#, &["2"]);
+}
+
+#[test]
+fn builtin_strrep() {
+    check(r#"/echo $[strrep("ab",3)]"#, &["ababab"]);
+}
+
+#[test]
+fn builtin_capitalize() {
+    // From help: capitalize using strcat+toupper+substr
+    check(
+        r#"/set s=hello world
+/echo $[strcat(toupper(substr(%s, 0, 1)), substr(%s, 1))]"#,
+        &["Hello world"],
+    );
+}
+
+#[test]
+fn macro_with_return() {
+    // /def with /return — from help examples
+    check(
+        r#"/def square = /return $[{1} * {1}]
+/echo $[square(7)]"#,
+        &["49"],
+    );
+}
+
+#[test]
+fn regmatch_from_helpfile() {
+    // From the help: regmatch with capture group
+    check(
+        r#"/test regmatch("foo(.*)", "foobar")
+/echo %P1"#,
+        &["bar"],
+    );
+}

@@ -2111,8 +2111,12 @@ impl EvalContext for Interpreter {
         if self.macros.contains_key(name) {
             let stmts = self.macros.get_mut(name).unwrap().stmts()?.to_vec();
             let params: Vec<String> = args.iter().map(|v| v.to_string()).collect();
-            self.invoke_macro(stmts, name, params)?;
-            return Ok(Value::default());
+            // Propagate /return value when macro is called as a function expression.
+            let cf = self.invoke_macro(stmts, name, params)?;
+            return Ok(match cf {
+                Some(ControlFlow::Return(v)) => v,
+                _ => Value::default(),
+            });
         }
         // Unknown functions return empty string, matching TF's C behaviour.
         Ok(Value::default())

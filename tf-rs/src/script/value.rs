@@ -24,11 +24,19 @@ impl fmt::Display for Value {
         match self {
             Value::Int(n) => write!(f, "{n}"),
             Value::Float(x) => {
-                // TF prints floats without trailing zeros where possible.
-                if x.fract() == 0.0 && x.abs() < 1e15 {
-                    write!(f, "{:.1}", x)
+                // Match C TF's "%.15g" format: 15 significant digits, strip
+                // trailing zeros and unnecessary decimal point.
+                if x.is_nan() || x.is_infinite() {
+                    return write!(f, "{x}");
+                }
+                // Format with 15 decimal places then strip trailing zeros.
+                let s = format!("{:.15}", x);
+                if s.contains('.') {
+                    let trimmed = s.trim_end_matches('0');
+                    let trimmed = trimmed.strip_suffix('.').unwrap_or(trimmed);
+                    write!(f, "{trimmed}")
                 } else {
-                    write!(f, "{x}")
+                    write!(f, "{s}")
                 }
             }
             Value::Str(s) => write!(f, "{s}"),
@@ -213,7 +221,9 @@ mod tests {
     #[allow(clippy::approx_constant)]
     fn display_float() {
         assert_eq!(Value::Float(3.14).to_string(), "3.14");
-        assert_eq!(Value::Float(1.0).to_string(), "1.0");
+        assert_eq!(Value::Float(1.0).to_string(), "1");  // %.15g strips trailing zero
+        assert_eq!(Value::Float(25.0).to_string(), "25");
+        assert_eq!(Value::Float(0.5).to_string(), "0.5");
     }
 
     #[test]
