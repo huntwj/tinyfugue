@@ -291,3 +291,66 @@ fn echo_empty_line() {
     // C and Rust should agree: empty output list.
     check("/echo", &[]);
 }
+
+#[test]
+fn strcat_function() {
+    check(r#"/echo $[strcat("foo", "bar", "baz")]"#, &["foobarbaz"]);
+}
+
+#[test]
+fn strcat_empty_args() {
+    check(r#"/echo $[strcat("hello", "", " ", "world")]"#, &["hello world"]);
+}
+
+#[test]
+fn textencode_decode_roundtrip() {
+    check(
+        r#"/set enc=$[textencode("hello world")]
+/echo %enc
+/echo $[textdecode(%enc)]"#,
+        &["hello%20world", "hello world"],
+    );
+}
+
+#[test]
+fn textencode_special_chars() {
+    check(
+        r#"/echo $[textencode("a b+c")]"#,
+        &["a%20b%2Bc"],
+    );
+}
+
+#[test]
+fn regmatch_basic() {
+    check(
+        r#"/if (regmatch("hel+o", "hello")) /echo yes%; /else /echo no%; /endif"#,
+        &["yes"],
+    );
+}
+
+#[test]
+fn regmatch_no_match() {
+    check(
+        r#"/if (regmatch("xyz", "hello")) /echo yes%; /else /echo no%; /endif"#,
+        &["no"],
+    );
+}
+
+#[test]
+fn regmatch_capture_groups() {
+    check(
+        r#"/test regmatch("(\w+)\s+(\w+)", "hello world")
+/echo %P1
+/echo %P2"#,
+        &["hello", "world"],
+    );
+}
+
+#[test]
+fn eval_command() {
+    check(
+        r#"/set cmd=echo
+/eval /%cmd hello from eval"#,
+        &["hello from eval"],
+    );
+}

@@ -98,8 +98,18 @@ pub fn expand(src: &str, ctx: &mut dyn EvalContext) -> Result<String, String> {
                         out.push_str(&ctx.positional_params().join(" "));
                     }
                     Some('P') => {
-                        chars.next();
-                        out.push_str(ctx.current_cmd_name());
+                        chars.next(); // consume 'P'
+                        // %P alone = current command/procedure name.
+                        // %P0, %P1, … = regex capture groups (variable lookup).
+                        if matches!(chars.peek(), Some(c) if c.is_ascii_digit()) {
+                            let mut name = String::from('P');
+                            while matches!(chars.peek(), Some(c) if is_ident_continue(*c)) {
+                                name.push(chars.next().unwrap());
+                            }
+                            out.push_str(&lookup_var(&name, ctx));
+                        } else {
+                            out.push_str(ctx.current_cmd_name());
+                        }
                     }
                     Some('L') => {
                         chars.next();
@@ -192,11 +202,10 @@ pub fn expand(src: &str, ctx: &mut dyn EvalContext) -> Result<String, String> {
                                 _ => expr_src.push(ec),
                             }
                         }
-                        // Pre-expand %var references inside the expression
-                        // so that "$[%n-1]" correctly substitutes %n before
-                        // the expression evaluator runs (which treats % as modulo).
-                        let expanded_src = expand(&expr_src, ctx)?;
-                        let val = ctx.eval_expr_str(&expanded_src)?;
+                        // The expression evaluator handles %varname directly
+                        // (Token::Percent → Var lookup in parse_primary), so
+                        // no pre-expansion needed here.
+                        let val = ctx.eval_expr_str(&expr_src)?;
                         out.push_str(&val.to_string());
                     }
                     Some('{') => {

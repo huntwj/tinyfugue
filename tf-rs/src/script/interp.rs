@@ -2029,6 +2029,74 @@ impl EvalContext for Interpreter {
                 return Ok(Value::Int(1));
             }
 
+            "strcat" => {
+                // strcat(a, b, ...) — concatenate all arguments as strings.
+                let s: String = args.iter().map(|v| v.to_string()).collect();
+                return Ok(Value::Str(s));
+            }
+
+            "textencode" => {
+                // textencode(s) — percent-encode non-alphanumeric chars so any
+                // string can be safely used as part of a TF variable name.
+                let s = args.first().map(|v| v.to_string()).unwrap_or_default();
+                let mut out = String::with_capacity(s.len());
+                for b in s.bytes() {
+                    if b.is_ascii_alphanumeric() || b == b'_' {
+                        out.push(b as char);
+                    } else {
+                        out.push_str(&format!("%{:02X}", b));
+                    }
+                }
+                return Ok(Value::Str(out));
+            }
+
+            "textdecode" => {
+                // textdecode(s) — reverse of textencode; decode %XX sequences.
+                let s = args.first().map(|v| v.to_string()).unwrap_or_default();
+                let bytes = s.as_bytes();
+                let mut out = String::with_capacity(s.len());
+                let mut i = 0;
+                while i < bytes.len() {
+                    if bytes[i] == b'%' && i + 2 < bytes.len() {
+                        if let Ok(hex) = std::str::from_utf8(&bytes[i+1..i+3]) {
+                            if let Ok(b) = u8::from_str_radix(hex, 16) {
+                                out.push(b as char);
+                                i += 3;
+                                continue;
+                            }
+                        }
+                    }
+                    out.push(bytes[i] as char);
+                    i += 1;
+                }
+                return Ok(Value::Str(out));
+            }
+
+            "regmatch" => {
+                // regmatch(pattern, text) — PCRE regex match.
+                // Sets %P0 (whole match) and %P1..%Pn (capture groups) as globals.
+                // Returns 1 on match, 0 otherwise.
+                let pat = args.first().map(|v| v.to_string()).unwrap_or_default();
+                let text = args.get(1).map(|v| v.to_string()).unwrap_or_default();
+                match Pattern::new(&pat, MatchMode::Regexp) {
+                    Ok(pattern) => {
+                        if let Some(caps) = pattern.find(&text) {
+                            self.set_global("P0", Value::Str(caps.whole().to_owned()));
+                            for n in 1..=caps.group_count() {
+                                let key = format!("P{n}");
+                                let val = caps.group(n).unwrap_or("").to_owned();
+                                self.set_global(&key, Value::Str(val));
+                            }
+                            return Ok(Value::Int(1));
+                        } else {
+                            self.set_global("P0", Value::Str(String::new()));
+                            return Ok(Value::Int(0));
+                        }
+                    }
+                    Err(_) => return Ok(Value::Int(0)),
+                }
+            }
+
             _ => {}
         }
 

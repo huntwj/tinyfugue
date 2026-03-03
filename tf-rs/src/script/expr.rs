@@ -198,7 +198,11 @@ impl<'a> Lexer<'a> {
                 Some(b'\\') => match self.advance() {
                     Some(b'n') => s.push('\n'),
                     Some(b't') => s.push('\t'),
-                    Some(c) => s.push(c as char),
+                    Some(b'r') => s.push('\r'),
+                    Some(b'\\') => s.push('\\'),
+                    Some(c) if c == quote => s.push(c as char),
+                    // Unknown sequences (e.g. \w, \s, \d for regex): preserve the backslash.
+                    Some(c) => { s.push('\\'); s.push(c as char); }
                     None => break,
                 },
                 Some(c) if c == quote => break,
@@ -666,6 +670,17 @@ impl Parser {
                     return Err("expected ')'".into());
                 }
                 Ok(inner)
+            }
+            // %varname — TF variable reference inside an expression.
+            // Allows $[%n-1], textdecode(%enc), etc.
+            Token::Percent => {
+                match self.peek().clone() {
+                    Token::Ident(name) => {
+                        self.pos += 1;
+                        Ok(Expr::Var(name))
+                    }
+                    _ => Err("expected variable name after '%'".into()),
+                }
             }
             other => Err(format!("unexpected token {other:?}")),
         }
