@@ -419,11 +419,9 @@ impl Interpreter {
             }
 
             Stmt::Let { name, value } => {
-                let expanded = if self.file_load_mode && self.frames.is_empty() {
-                    value.clone()
-                } else {
-                    expand(value, self)?
-                };
+                // /let always expands its value (unlike /set which uses
+                // SUB_KEYWORD at file-load level).
+                let expanded = expand(value, self)?;
                 let val = try_parse_number(&expanded);
                 self.set_local(name, val);
                 Ok(None)
@@ -438,18 +436,25 @@ impl Interpreter {
             }
 
             Stmt::Expr { src } => {
-                let expanded = expand(src, self)?;
-                eval_str(&expanded, self)?;
+                // Same rationale as Stmt::Return: skip expand() so {N} positional
+                // params are handled correctly by the expression evaluator.
+                eval_str(src, self)?;
                 Ok(None)
             }
 
             Stmt::Return { value } => {
+                // Evaluate the expression directly — do NOT pre-process through
+                // expand() first.  expand() would convert bare-brace positional
+                // params like {1} into their string representation ("testvar"),
+                // which would then be re-parsed as a variable reference in the
+                // expression context (Expr::Var("testvar")).  By going straight
+                // to eval_str(), {1} becomes Expr::Positional(1) which returns
+                // the actual Value from the call frame — matching C TF's OP_PPARM
+                // behaviour.  The $[expr] form (Expr::ExprSub) is handled
+                // natively by eval_str() so existing uses of /return $[...] work.
                 let v = match value {
                     None => Value::default(),
-                    Some(src) => {
-                        let expanded = expand(src, self)?;
-                        eval_str(&expanded, self)?
-                    }
+                    Some(src) => eval_str(src, self)?
                 };
                 Ok(Some(ControlFlow::Return(v)))
             }
@@ -646,8 +651,10 @@ impl Interpreter {
 
                 let loader = self.file_loader.clone();
                 if let Some(loader) = loader {
-                    // For bare filenames (no leading /, ./, ~/) try TFLIBDIR first,
-                    // then fall back to the literal path — mirrors C TF behaviour.
+                    // For bare filenames (no leading /, ./, ~/) search:
+                    //   1. Each dir in TFPATH (space-separated) — mirrors C TF.
+                    //   2. TFLIBDIR (fallback when TFPATH is unset/empty).
+                    //   3. The literal path as-is.
                     let is_relative = !raw_path.is_empty()
                         && !raw_path.starts_with('/')
                         && !raw_path.starts_with('.')
@@ -655,6 +662,17 @@ impl Interpreter {
 
                     let paths: Vec<String> = if is_relative {
                         let mut v = Vec::new();
+                        // TFPATH: space-separated list of absolute directories.
+                        if let Some(tfpath) =
+                            self.get_var("TFPATH").map(|v| v.to_string())
+                        {
+                            if !tfpath.trim().is_empty() {
+                                for dir in tfpath.split_whitespace() {
+                                    v.push(format!("{dir}/{raw_path}"));
+                                }
+                            }
+                        }
+                        // Fallback: TFLIBDIR (standard library dir).
                         if let Some(libdir) =
                             self.get_var("TFLIBDIR").map(|v| v.to_string())
                         {
@@ -1019,13 +1037,37 @@ impl Interpreter {
 
             "listvar" => {
                 let expanded = expand(args, self)?;
-                let pat = expanded.trim().to_owned();
+                // Parse flags: -s (silent), -m<mode> (match mode), -S (sort)
+                let mut silent = false;
+                let mut pat = String::new();
+                let mut iter = expanded.split_whitespace().peekable();
+                while let Some(tok) = iter.peek().copied() {
+                    if tok.starts_with('-') {
+                        let flag = tok;
+                        iter.next();
+                        if flag == "-s" || flag.starts_with("-s") {
+                            silent = true;
+                        }
+                        // -m<mode>, -S etc. — consume but don't act on for now
+                    } else {
+                        break;
+                    }
+                }
+                if let Some(p) = iter.next() {
+                    pat = p.to_owned();
+                }
+
                 let mut vars: Vec<(&String, &Value)> = self.globals.iter()
-                    .filter(|(k, _)| pat.is_empty() || k.contains(pat.as_str()))
+                    .filter(|(k, _)| {
+                        if pat.is_empty() { true }
+                        else { k.as_str() == pat.as_str() || k.contains(pat.as_str()) }
+                    })
                     .collect();
                 vars.sort_by_key(|(k, _)| k.as_str());
                 if vars.is_empty() {
-                    self.output.push("% No variables defined.".to_owned());
+                    if !silent {
+                        self.output.push("% No variables defined.".to_owned());
+                    }
                 } else {
                     for (k, v) in vars {
                         self.output.push(format!("% {k}={v}"));
@@ -1522,8 +1564,8 @@ impl Interpreter {
             // /test expr — evaluate expr and return its boolean value.
             // Used by /@test in /if conditions.
             "test" | "result" => {
-                let expanded = expand(args, self)?;
-                let val = eval_str(&expanded, self)?;
+                // Skip expand() — same rationale as Stmt::Return.
+                let val = eval_str(args, self)?;
                 Ok(Some(ControlFlow::Return(val)))
             }
 

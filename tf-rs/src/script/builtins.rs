@@ -83,26 +83,11 @@ pub fn call_builtin(name: &str, args: Vec<Value>) -> Option<Result<Value, String
                 let s = get_str(&args, 0, name)?;
                 Value::Str(s.to_lowercase())
             }
-            "strstr" => {
-                let haystack = get_str(&args, 0, name)?;
-                let needle = get_str(&args, 1, name)?;
-                Value::Int(match haystack.find(&needle) {
-                    Some(i) => i as i64,
-                    None => -1,
-                })
-            }
             "strrep" => {
                 // strrep(str, count) — repeat str n times
                 let s = get_str(&args, 0, name)?;
                 let n = get_int(&args, 1, name)?.max(0) as usize;
                 Value::Str(s.repeat(n))
-            }
-            "replace" => {
-                // replace(haystack, needle, replacement)
-                let haystack = get_str(&args, 0, name)?;
-                let needle = get_str(&args, 1, name)?;
-                let repl = get_str(&args, 2, name)?;
-                Value::Str(haystack.replace(&needle, &repl))
             }
             "pad" => {
                 // pad(s1, w1 [, s2, w2, ...]) — pad/truncate each si to |wi| chars and
@@ -315,21 +300,83 @@ pub fn call_builtin(name: &str, args: Vec<Value>) -> Option<Result<Value, String
 
             // ── String search ──────────────────────────────────────────────────
             "strchr" => {
-                // strchr(str, char) → 0-based index of first occurrence, or -1
+                // strchr(str, charset[, offset]) → 0-based index of first char
+                // in `charset` found in `str` starting at `offset`, or -1.
+                // Like C's strcspn but searching a set of characters and
+                // returning the index.
                 let s = get_str(&args, 0, name)?;
-                let c_str = get_str(&args, 1, name)?;
-                let c = c_str.chars().next().unwrap_or('\0');
-                Value::Int(s.chars().position(|ch| ch == c).map(|i| i as i64).unwrap_or(-1))
+                let charset = get_str(&args, 1, name)?;
+                let chars: Vec<char> = s.chars().collect();
+                let offset = if args.len() >= 3 {
+                    args[2].as_int().max(0) as usize
+                } else {
+                    0
+                };
+                let result = chars[offset.min(chars.len())..]
+                    .iter()
+                    .enumerate()
+                    .find(|(_, &ch)| charset.contains(ch))
+                    .map(|(i, _)| (offset + i) as i64)
+                    .unwrap_or(-1);
+                Value::Int(result)
             }
             "strrchr" => {
-                // strrchr(str, char) → 0-based index of last occurrence, or -1
+                // strrchr(str, charset[, start_offset]) → index of last char
+                // in `charset` found in `str` at or before `start_offset`, or -1.
+                // Scans backwards from start_offset (defaults to end of string).
                 let s = get_str(&args, 0, name)?;
-                let c_str = get_str(&args, 1, name)?;
-                let c = c_str.chars().next().unwrap_or('\0');
+                let charset = get_str(&args, 1, name)?;
                 let chars: Vec<char> = s.chars().collect();
-                Value::Int(chars.iter().enumerate().rev()
-                    .find(|(_, &ch)| ch == c)
-                    .map(|(i, _)| i as i64).unwrap_or(-1))
+                let start = if args.len() >= 3 {
+                    (args[2].as_int() as usize).min(chars.len().saturating_sub(1))
+                } else {
+                    chars.len().saturating_sub(1)
+                };
+                let result = chars[..=start.min(chars.len().saturating_sub(1))]
+                    .iter()
+                    .enumerate()
+                    .rev()
+                    .find(|(_, &ch)| charset.contains(ch))
+                    .map(|(i, _)| i as i64)
+                    .unwrap_or(-1);
+                Value::Int(result)
+            }
+            "strstr" => {
+                // strstr(haystack, needle[, offset]) → 0-based index of first
+                // occurrence of `needle` in `haystack` starting at `offset`, or -1.
+                let haystack = get_str(&args, 0, name)?;
+                let needle = get_str(&args, 1, name)?;
+                if needle.is_empty() {
+                    return Ok(Some(Value::Int(0)));
+                }
+                let chars: Vec<char> = haystack.chars().collect();
+                let offset = if args.len() >= 3 {
+                    args[2].as_int().max(0) as usize
+                } else {
+                    0
+                };
+                // Build a char-indexed search from offset onward.
+                let hay_str: String = chars[offset.min(chars.len())..].iter().collect();
+                let result = hay_str.find(needle.as_str())
+                    .map(|byte_pos| {
+                        // Convert byte offset back to char offset.
+                        let char_pos = hay_str[..byte_pos].chars().count();
+                        (offset + char_pos) as i64
+                    })
+                    .unwrap_or(-1);
+                Value::Int(result)
+            }
+            "replace" => {
+                // replace(old, new, str) → replace all occurrences of `old` in
+                // `str` with `new`.  Argument order matches C TF: old, new, str.
+                let old = get_str(&args, 0, name)?;
+                let new = get_str(&args, 1, name)?;
+                let s   = get_str(&args, 2, name)?;
+                if old.is_empty() {
+                    Value::Str(s)
+                } else {
+                    Value::Str(s.replace(old.as_str(), new.as_str()))
+                }
             }
             "regmatch" => {
                 // regmatch(pattern, string[, repl]) → 1 if matches, 0 otherwise
@@ -972,6 +1019,42 @@ mod tests {
     }
 
     #[test]
+    fn strrep() {
+        assert_eq!(
+            call("strrep", vec!["ab".into(), Value::Int(3)]),
+            Value::Str("ababab".into())
+        );
+    }
+
+    #[test]
+    fn replace_fn() {
+        // replace(old, new, str) — C TF argument order
+        let v = call(
+            "replace",
+            vec!["world".into(), "Rust".into(), "hello world".into()],
+        );
+        assert_eq!(v, Value::Str("hello Rust".into()));
+    }
+
+    #[test]
+    fn replace_all_occurrences() {
+        let v = call(
+            "replace",
+            vec![" ".into(), "_".into(), "a b c".into()],
+        );
+        assert_eq!(v, Value::Str("a_b_c".into()));
+    }
+
+    #[test]
+    fn replace_empty_old_returns_unchanged() {
+        let v = call(
+            "replace",
+            vec!["".into(), "X".into(), "hello".into()],
+        );
+        assert_eq!(v, Value::Str("hello".into()));
+    }
+
+    #[test]
     fn strstr_found() {
         assert_eq!(
             call("strstr", vec!["foobar".into(), "bar".into()]),
@@ -988,20 +1071,40 @@ mod tests {
     }
 
     #[test]
-    fn strrep() {
+    fn strstr_with_offset() {
+        // "abcabc", find "a" starting at offset 1 → found at 3
         assert_eq!(
-            call("strrep", vec!["ab".into(), Value::Int(3)]),
-            Value::Str("ababab".into())
+            call("strstr", vec!["abcabc".into(), "a".into(), Value::Int(1)]),
+            Value::Int(3)
         );
     }
 
     #[test]
-    fn replace_fn() {
-        let v = call(
-            "replace",
-            vec!["hello world".into(), "world".into(), "Rust".into()],
+    fn strchr_with_offset() {
+        // strchr("hello", "l", 3) → 3 (the second 'l')
+        assert_eq!(
+            call("strchr", vec!["hello".into(), "l".into(), Value::Int(3)]),
+            Value::Int(3)
         );
-        assert_eq!(v, Value::Str("hello Rust".into()));
+        // strchr("hello", "l", 0) → 2 (first 'l')
+        assert_eq!(
+            call("strchr", vec!["hello".into(), "l".into(), Value::Int(0)]),
+            Value::Int(2)
+        );
+    }
+
+    #[test]
+    fn strrchr_with_offset() {
+        // strrchr("hello", "l", 4) → 3 (last 'l' at or before index 4)
+        assert_eq!(
+            call("strrchr", vec!["hello".into(), "l".into(), Value::Int(4)]),
+            Value::Int(3)
+        );
+        // strrchr("hello", "l", 2) → 2 (last 'l' at or before index 2)
+        assert_eq!(
+            call("strrchr", vec!["hello".into(), "l".into(), Value::Int(2)]),
+            Value::Int(2)
+        );
     }
 
     #[test]

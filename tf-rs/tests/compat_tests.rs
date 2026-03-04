@@ -508,3 +508,63 @@ fn cmd_substitution_in_expr_fallback() {
         &["none"],
     );
 }
+
+// ── String search functions ────────────────────────────────────────────────
+
+#[test]
+fn builtin_replace() {
+    // replace(old, new, str) — C TF argument order
+    check(r#"/echo $[replace(" ", "", "a b c")]"#, &["abc"]);
+    check(r#"/echo $[replace("world", "Rust", "hello world")]"#, &["hello Rust"]);
+}
+
+#[test]
+fn builtin_strstr() {
+    check(r#"/echo $[strstr("hello world", "world")]"#, &["6"]);
+    check(r#"/echo $[strstr("hello", "xyz")]"#, &["-1"]);
+    // With offset: find second 'a' in "abcabc"
+    check(r#"/echo $[strstr("abcabc", "a", 1)]"#, &["3"]);
+}
+
+#[test]
+fn builtin_strchr_offset() {
+    // strchr with start offset
+    check(r#"/echo $[strchr("hello", "l", 3)]"#, &["3"]);
+    check(r#"/echo $[strchr("hello", "l", 0)]"#, &["2"]);
+}
+
+#[test]
+fn builtin_strrchr_offset() {
+    // strrchr with start offset
+    check(r#"/echo $[strrchr("hello", "l", 4)]"#, &["3"]);
+    check(r#"/echo $[strrchr("hello", "l", 2)]"#, &["2"]);
+}
+
+// ── Positional param fix: {N} in /return expression context ──────────────────
+
+#[test]
+fn return_positional_as_function_arg() {
+    // When a macro is called as a function expression $[macro(arg)], the
+    // positional param {1} inside /return must be treated as a VALUE (the
+    // string "testvar"), not re-parsed as a variable reference (Expr::Var).
+    // This previously returned 0 because {1} → "testvar" (bare) → lookup %testvar.
+    check(
+        r#"/def checkvar = /return isset({1})
+/set testvar=hello
+/echo $[checkvar("testvar")]
+/echo $[checkvar("nonexistent")]"#,
+        &["1", "0"],
+    );
+}
+
+#[test]
+fn return_dollar_bracket_still_works() {
+    // /return $[expr] — the $[...] wrapper is a no-op in expression context.
+    // Verifies that Token::ExprSub evaluates the inner expression correctly
+    // and that {N} inside $[...] still works (via Expr::Positional).
+    check(
+        r#"/def square = /return $[{1} * {1}]
+/echo $[square(7)]"#,
+        &["49"],
+    );
+}

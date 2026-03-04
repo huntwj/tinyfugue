@@ -112,6 +112,10 @@ pub enum Token {
     BraceRef(String),
     /// `$(cmd)` — command substitution: capture echo output of `cmd`.
     CmdSub(String),
+    /// `$[expr]` — expression-in-expression: evaluate `expr` and return its value.
+    /// Used when `Stmt::Return` skips `expand()` and passes the raw source to
+    /// `eval_str()` directly — the `$[...]` wrapper becomes a no-op grouping form.
+    ExprSub(String),
     /// Unrecognised input byte — reported as a diagnostic instead of masking as EOF.
     Unknown(char),
     Eof,
@@ -381,6 +385,26 @@ impl<'a> Lexer<'a> {
                         }
                     }
                     Token::CmdSub(cmd)
+                } else if self.peek() == Some(b'[') {
+                    // $[expr] — expression-in-expression.  When Stmt::Return passes
+                    // its raw source directly to eval_str() (skipping expand()), the
+                    // $[...] wrapper becomes a simple grouping construct.
+                    self.pos += 1; // consume '['
+                    let mut inner = String::new();
+                    let mut depth = 1usize;
+                    loop {
+                        match self.advance() {
+                            None => break,
+                            Some(b'[') => { depth += 1; inner.push('['); }
+                            Some(b']') => {
+                                depth -= 1;
+                                if depth == 0 { break; }
+                                inner.push(']');
+                            }
+                            Some(c) => inner.push(c as char),
+                        }
+                    }
+                    Token::ExprSub(inner)
                 } else {
                     Token::Unknown('$')
                 }
@@ -467,6 +491,9 @@ pub enum Expr {
     Comma(Vec<Expr>),
     /// `$(cmd)` — execute `cmd` and substitute its echo output.
     CmdSub(String),
+    /// `$[expr]` — evaluate `expr` as a nested expression (grouping form used
+    /// when `Stmt::Return` passes its raw source directly to `eval_str()`).
+    ExprSub(String),
 }
 
 // ── Parser ────────────────────────────────────────────────────────────────────
@@ -763,6 +790,8 @@ impl Parser {
             // $(...) — command substitution: value is the captured echo output.
             // Deferred to eval time via Expr::CmdSub so the parser stays pure.
             Token::CmdSub(cmd) => Ok(Expr::CmdSub(cmd)),
+            // $[expr] — expression-in-expression grouping.
+            Token::ExprSub(src) => Ok(Expr::ExprSub(src)),
             other => Err(format!("unexpected token {other:?}")),
         }
     }
@@ -885,6 +914,13 @@ pub fn eval_expr(expr: &Expr, ctx: &mut dyn EvalContext) -> Result<Value, String
             // captured lines are joined with spaces as the substitution value).
             let captured = ctx.exec_and_capture(cmd)?;
             Ok(Value::Str(captured))
+        }
+
+        Expr::ExprSub(src) => {
+            // $[expr] used as a nested expression (when Stmt::Return passes raw
+            // source to eval_str directly).  Evaluate the inner expression in
+            // the same context so {N} / %name references work correctly.
+            ctx.eval_expr_str(src)
         }
     }
 }
