@@ -34,6 +34,25 @@ use super::expr::{EvalContext, eval_str};
 ///
 /// Uses `ctx` for variable lookups and expression evaluation.
 pub fn expand(src: &str, ctx: &mut dyn EvalContext) -> Result<String, String> {
+    expand_impl(src, ctx, false)
+}
+
+/// Like [`expand`], but wraps positional-parameter values in expression string
+/// quotes so they survive `eval_str` as literals rather than being
+/// re-interpreted as variable names.
+///
+/// Use this before passing a string to `eval_str` from `/test`, `/result`,
+/// `Stmt::Return`, or `Stmt::Expr` contexts.  Ordinary `%{name}` variable
+/// references are still expanded to their raw text values (matching C TF
+/// expand-then-eval semantics); only `{N}` / `%N` / `{L}` / `{*}` (positional
+/// param) outputs are quoted.
+pub fn expand_for_expr(src: &str, ctx: &mut dyn EvalContext) -> Result<String, String> {
+    expand_impl(src, ctx, true)
+}
+
+// ── Core implementation ───────────────────────────────────────────────────────
+
+fn expand_impl(src: &str, ctx: &mut dyn EvalContext, quote_pos: bool) -> Result<String, String> {
     let mut out = String::with_capacity(src.len());
     let mut chars = src.chars().peekable();
 
@@ -87,15 +106,17 @@ pub fn expand(src: &str, ctx: &mut dyn EvalContext) -> Result<String, String> {
                         // %{name} — consume '{'
                         chars.next();
                         let name = read_brace_name(&mut chars)?;
-                        out.push_str(&resolve_brace(name, ctx));
+                        out.push_str(&resolve_brace_impl(name, ctx, quote_pos));
                     }
                     Some('#') => {
                         chars.next();
+                        // Count is never a positional value — no quoting.
                         out.push_str(&ctx.positional_params().len().to_string());
                     }
                     Some('*') => {
                         chars.next();
-                        out.push_str(&ctx.positional_params().join(" "));
+                        let val = ctx.positional_params().join(" ");
+                        out.push_str(&maybe_quote(val, quote_pos));
                     }
                     Some('P') => {
                         chars.next(); // consume 'P'
@@ -124,9 +145,8 @@ pub fn expand(src: &str, ctx: &mut dyn EvalContext) -> Result<String, String> {
                     Some('L') => {
                         chars.next();
                         let params = ctx.positional_params();
-                        if let Some(last) = params.last() {
-                            out.push_str(last);
-                        }
+                        let val = params.last().cloned().unwrap_or_default();
+                        out.push_str(&maybe_quote(val, quote_pos));
                     }
                     Some('-') => {
                         // %-L (all-but-last) or %-N (all-but-first-N)
@@ -135,9 +155,12 @@ pub fn expand(src: &str, ctx: &mut dyn EvalContext) -> Result<String, String> {
                             Some('L') => {
                                 chars.next(); // consume 'L'
                                 let params = ctx.positional_params().to_vec();
-                                if params.len() > 1 {
-                                    out.push_str(&params[..params.len() - 1].join(" "));
-                                }
+                                let val = if params.len() > 1 {
+                                    params[..params.len() - 1].join(" ")
+                                } else {
+                                    String::new()
+                                };
+                                out.push_str(&maybe_quote(val, quote_pos));
                             }
                             Some(d) if d.is_ascii_digit() => {
                                 let mut n_str = String::new();
@@ -146,9 +169,12 @@ pub fn expand(src: &str, ctx: &mut dyn EvalContext) -> Result<String, String> {
                                 }
                                 if let Ok(n) = n_str.parse::<usize>() {
                                     let params = ctx.positional_params().to_vec();
-                                    if n < params.len() {
-                                        out.push_str(&params[n..].join(" "));
-                                    }
+                                    let val = if n < params.len() {
+                                        params[n..].join(" ")
+                                    } else {
+                                        String::new()
+                                    };
+                                    out.push_str(&maybe_quote(val, quote_pos));
                                 }
                             }
                             _ => {
@@ -166,9 +192,8 @@ pub fn expand(src: &str, ctx: &mut dyn EvalContext) -> Result<String, String> {
                         }
                         let idx: usize = n_str.parse().unwrap_or(0);
                         let params = ctx.positional_params();
-                        out.push_str(
-                            params.get(idx.saturating_sub(1)).map(String::as_str).unwrap_or(""),
-                        );
+                        let val = params.get(idx.saturating_sub(1)).cloned().unwrap_or_default();
+                        out.push_str(&maybe_quote(val, quote_pos));
                     }
                     Some(c) if is_ident_start(c) => {
                         // %name — bare variable name (or special %R for random param)
@@ -186,7 +211,8 @@ pub fn expand(src: &str, ctx: &mut dyn EvalContext) -> Result<String, String> {
                                     .duration_since(std::time::UNIX_EPOCH)
                                     .unwrap_or_default()
                                     .subsec_nanos() as usize;
-                                out.push_str(&params[ns % params.len()]);
+                                let val = params[ns % params.len()].clone();
+                                out.push_str(&maybe_quote(val, quote_pos));
                             }
                         } else {
                             out.push_str(&lookup_var(&name, ctx));
@@ -201,7 +227,7 @@ pub fn expand(src: &str, ctx: &mut dyn EvalContext) -> Result<String, String> {
             '{' => {
                 // {n}, {#}, {*}, {P}, {L}, {-N}, … — brace-only forms (no leading %)
                 let name = read_brace_name(&mut chars)?;
-                out.push_str(&resolve_brace(name, ctx));
+                out.push_str(&resolve_brace_impl(name, ctx, quote_pos));
             }
             '$' => {
                 match chars.peek().copied() {
@@ -235,7 +261,7 @@ pub fn expand(src: &str, ctx: &mut dyn EvalContext) -> Result<String, String> {
                         // ${name} — same as %{name}
                         chars.next(); // consume '{'
                         let name = read_brace_name(&mut chars)?;
-                        out.push_str(&resolve_brace(name, ctx));
+                        out.push_str(&resolve_brace_impl(name, ctx, quote_pos));
                     }
                     Some('(') => {
                         // $(...) — command substitution.
@@ -287,6 +313,38 @@ fn is_ident_continue(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '_'
 }
 
+/// If `quote_pos` is true, wrap `val` as a double-quoted expression string
+/// literal (escaping `\` and `"`).  Otherwise return `val` unchanged.
+///
+/// Used to protect positional-parameter values from being re-interpreted as
+/// variable names when the expanded text is subsequently fed to `eval_str`.
+fn maybe_quote(val: String, quote_pos: bool) -> String {
+    if quote_pos {
+        quote_for_expr(&val)
+    } else {
+        val
+    }
+}
+
+/// Wrap `s` in double quotes, escaping `\`, `"`, newlines, and tabs so the
+/// result is a valid TF expression string literal.
+fn quote_for_expr(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"'  => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c    => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 /// Read everything up to and including the closing `}`, tracking nested
 /// `{...}` depth so that `%{foo-%{bar}}` correctly yields `foo-%{bar}`.
 fn read_brace_name(chars: &mut std::iter::Peekable<std::str::Chars>) -> Result<String, String> {
@@ -312,26 +370,23 @@ fn read_brace_name(chars: &mut std::iter::Peekable<std::str::Chars>) -> Result<S
     Ok(name)
 }
 
-/// Resolve a `{name}` / `%{name}` / `${name}` expression.
-///
-/// Handles the full TF positional-argument form, default-value syntax, and
-/// plain variable lookup — see module doc-comment for the complete table.
-fn resolve_brace(name: String, ctx: &mut dyn EvalContext) -> String {
+fn resolve_brace_impl(name: String, ctx: &mut dyn EvalContext, quote_pos: bool) -> String {
     // Clone params up-front so we can borrow `ctx` mutably later.
     let params: Vec<String> = ctx.positional_params().to_vec();
 
     // ── Fast path for common atomic forms ────────────────────────────────────
     match name.as_str() {
         "#" => return params.len().to_string(),
-        "*" => return params.join(" "),
+        "*" => return maybe_quote(params.join(" "), quote_pos),
         "P" => return ctx.current_cmd_name().to_owned(),
-        "L" => return params.last().cloned().unwrap_or_default(),
+        "L" => return maybe_quote(params.last().cloned().unwrap_or_default(), quote_pos),
         "-L" => {
-            return if params.len() > 1 {
+            let val = if params.len() > 1 {
                 params[..params.len() - 1].join(" ")
             } else {
                 String::new()
             };
+            return maybe_quote(val, quote_pos);
         }
         _ => {}
     }
@@ -346,7 +401,7 @@ fn resolve_brace(name: String, ctx: &mut dyn EvalContext) -> String {
                 None
             };
             return if let Some(v) = all_but_last {
-                v
+                maybe_quote(v, quote_pos)
             } else if let Some(default_str) = rest.strip_prefix("L-") {
                 expand_default(default_str, ctx)
             } else {
@@ -363,7 +418,8 @@ fn resolve_brace(name: String, ctx: &mut dyn EvalContext) -> String {
                 Vec::new()
             };
             return if !slice.is_empty() {
-                slice.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" ")
+                let val = slice.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" ");
+                maybe_quote(val, quote_pos)
             } else if let Some(default_str) = opt_default {
                 expand_default(default_str, ctx)
             } else {
@@ -377,11 +433,11 @@ fn resolve_brace(name: String, ctx: &mut dyn EvalContext) -> String {
 
     // ── `*` forms: {*}, {*-<default>} ────────────────────────────────────────
     if name == "*" {
-        return params.join(" ");
+        return maybe_quote(params.join(" "), quote_pos);
     }
     if let Some(default_str) = name.strip_prefix("*-") {
         return if !params.is_empty() {
-            params.join(" ")
+            maybe_quote(params.join(" "), quote_pos)
         } else {
             expand_default(default_str, ctx)
         };
@@ -393,7 +449,7 @@ fn resolve_brace(name: String, ctx: &mut dyn EvalContext) -> String {
     if let Ok(n) = key.parse::<usize>() {
         let val = params.get(n.saturating_sub(1)).cloned();
         return if let Some(v) = val {
-            v
+            maybe_quote(v, quote_pos)
         } else if let Some(default_str) = opt_default {
             expand_default(default_str, ctx)
         } else {
@@ -405,7 +461,7 @@ fn resolve_brace(name: String, ctx: &mut dyn EvalContext) -> String {
     if key == "L" {
         let val = params.last().cloned();
         return if let Some(v) = val {
-            v
+            maybe_quote(v, quote_pos)
         } else if let Some(default_str) = opt_default {
             expand_default(default_str, ctx)
         } else {
@@ -524,6 +580,10 @@ mod tests {
 
     fn exp(src: &str, ctx: &mut TestCtx) -> String {
         expand(src, ctx).expect("expand failed")
+    }
+
+    fn exp_expr(src: &str, ctx: &mut TestCtx) -> String {
+        expand_for_expr(src, ctx).expect("expand_for_expr failed")
     }
 
     #[test]
@@ -770,5 +830,48 @@ mod tests {
         let mut ctx = TestCtx::new();
         ctx.vars.insert("x".into(), Value::Int(10));
         assert_eq!(exp("result=%(x * 2)", &mut ctx), "result=20");
+    }
+
+    // ── expand_for_expr tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn expand_for_expr_quotes_positional_string() {
+        // {1} with a string param → quoted string literal in output.
+        let mut ctx = TestCtx::new();
+        ctx.params = vec!["mycolor".into()];
+        assert_eq!(exp_expr("fn({1})", &mut ctx), r#"fn("mycolor")"#);
+    }
+
+    #[test]
+    fn expand_for_expr_quotes_positional_number() {
+        // {1} with a numeric param → quoted "42" (coerced back at eval time).
+        let mut ctx = TestCtx::new();
+        ctx.params = vec!["42".into()];
+        assert_eq!(exp_expr("{1}", &mut ctx), r#""42""#);
+    }
+
+    #[test]
+    fn expand_for_expr_does_not_quote_var_ref() {
+        // %{name} is a variable reference — NOT quoted, expands to raw value
+        // so that eval_str sees it as a bare ident (C TF double-deref semantics).
+        let mut ctx = TestCtx::new();
+        ctx.vars.insert("ptr".into(), Value::Str("var_global_mycolor".into()));
+        assert_eq!(exp_expr("%{ptr}", &mut ctx), "var_global_mycolor");
+    }
+
+    #[test]
+    fn expand_for_expr_dynamic_varname_concat() {
+        // util_event_%{_event} — var-name construction by concatenation.
+        let mut ctx = TestCtx::new();
+        ctx.vars.insert("_event".into(), Value::Str("click".into()));
+        assert_eq!(exp_expr("util_event_%{_event}", &mut ctx), "util_event_click");
+    }
+
+    #[test]
+    fn expand_for_expr_quotes_special_chars() {
+        // Param containing " and \ must be properly escaped.
+        let mut ctx = TestCtx::new();
+        ctx.params = vec![r#"say "hi""#.into()];
+        assert_eq!(exp_expr("{1}", &mut ctx), r#""say \"hi\"""#);
     }
 }

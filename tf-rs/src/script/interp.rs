@@ -14,7 +14,7 @@ use crate::macros::Macro;
 use crate::pattern::{MatchMode, Pattern};
 use super::{
     builtins::call_builtin,
-    expand::expand,
+    expand::{expand, expand_for_expr},
     expr::{eval_str, EvalContext},
     stmt::{parse_script, Stmt},
     value::Value,
@@ -436,25 +436,22 @@ impl Interpreter {
             }
 
             Stmt::Expr { src } => {
-                // Same rationale as Stmt::Return: skip expand() so {N} positional
-                // params are handled correctly by the expression evaluator.
-                eval_str(src, self)?;
+                // Use expand_for_expr: expands %{name}/util_event_%{var} as text
+                // (C TF semantics) but quotes {N} positional params as string
+                // literals so they survive eval_str without being re-looked-up
+                // as variable names.
+                let expanded = expand_for_expr(src, self)?;
+                eval_str(&expanded, self)?;
                 Ok(None)
             }
 
             Stmt::Return { value } => {
-                // Evaluate the expression directly — do NOT pre-process through
-                // expand() first.  expand() would convert bare-brace positional
-                // params like {1} into their string representation ("testvar"),
-                // which would then be re-parsed as a variable reference in the
-                // expression context (Expr::Var("testvar")).  By going straight
-                // to eval_str(), {1} becomes Expr::Positional(1) which returns
-                // the actual Value from the call frame — matching C TF's OP_PPARM
-                // behaviour.  The $[expr] form (Expr::ExprSub) is handled
-                // natively by eval_str() so existing uses of /return $[...] work.
                 let v = match value {
                     None => Value::default(),
-                    Some(src) => eval_str(src, self)?
+                    Some(src) => {
+                        let expanded = expand_for_expr(src, self)?;
+                        eval_str(&expanded, self)?
+                    }
                 };
                 Ok(Some(ControlFlow::Return(v)))
             }
@@ -1564,8 +1561,8 @@ impl Interpreter {
             // /test expr — evaluate expr and return its boolean value.
             // Used by /@test in /if conditions.
             "test" | "result" => {
-                // Skip expand() — same rationale as Stmt::Return.
-                let val = eval_str(args, self)?;
+                let expanded = expand_for_expr(args, self)?;
+                let val = eval_str(&expanded, self)?;
                 Ok(Some(ControlFlow::Return(val)))
             }
 
