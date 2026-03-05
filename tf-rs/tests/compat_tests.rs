@@ -568,3 +568,73 @@ fn return_dollar_bracket_still_works() {
         &["49"],
     );
 }
+
+#[test]
+fn colon_assign_direct() {
+    // name := val — set global %name directly.
+    check(
+        r#"/test myvar := "hello"
+/echo %myvar"#,
+        &["hello"],
+    );
+}
+
+#[test]
+fn colon_assign_indirect() {
+    // %name := val — evaluate %name, use result as target global var name.
+    // This is the pattern used by tf-util's declareVar/setVar/getVar.
+    check(
+        r#"/set _target=mycolor
+/test %_target := "blue"
+/echo %mycolor"#,
+        &["blue"],
+    );
+}
+
+#[test]
+fn indirect_var_read() {
+    // %{name} in expression context — n-level indirection (eval value of %name
+    // as an expression).  Used by tf-util util_getVar: /result %{_globalVar}.
+    check(
+        r#"/set _ptr=greeting
+/set greeting=hello
+/echo $[%{_ptr}]"#,
+        &["hello"],
+    );
+}
+
+#[test]
+fn indirect_var_nested() {
+    // Two levels: a → b → value.  Demonstrates arbitrary-depth dereference.
+    check(
+        r#"/set a=b
+/set b=42
+/echo $[%{a}]"#,
+        &["42"],
+    );
+}
+
+#[test]
+fn indirect_call() {
+    // %{name}(args) — indirect function call: get function name from %name.
+    check(
+        r#"/def square = /return {1}*{1}
+/set fn=square
+/echo $[%{fn}(7)]"#,
+        &["49"],
+    );
+}
+
+#[test]
+fn tf_util_declare_get_var() {
+    // Simulate tf-util's declareVar/getVar pattern inline (without requiring
+    // the tf-util files): indirect global assign + indirect read.
+    check(
+        r#"/def -i gvn = /let _n=%{1}%; /let _gn=var_global_%{_n}%; /result _gn
+/def -i dv = /let _vn=%{1}%; /let _gv=$[gvn(_vn)]%; /let _dval=%{2}%; /test %_gv := _dval
+/def -i gv = /let _vn=%{1}%; /let _gname=$[gvn(_vn)]%; /result %{_gname}
+/dv mycolor blue
+/echo $[gv("mycolor")]"#,
+        &["blue"],
+    );
+}

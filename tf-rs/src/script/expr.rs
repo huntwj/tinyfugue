@@ -100,6 +100,7 @@ pub enum Token {
     StarAssign,    // *=
     SlashAssign,   // /=
     PercentAssign, // %=
+    ColonAssign,   // :=  (global/dynamic assign — sets the named global var)
 
     // Misc
     Question,
@@ -348,7 +349,13 @@ impl<'a> Lexer<'a> {
                 }
             }
             b'?' => Token::Question,
-            b':' => Token::Colon,
+            b':' => {
+                if self.eat(b'=') {
+                    Token::ColonAssign // := global assign
+                } else {
+                    Token::Colon
+                }
+            }
             b',' => Token::Comma,
             b'.' => Token::Dot,
             b'(' => Token::LParen,
@@ -466,6 +473,13 @@ pub enum UnaryOp {
 #[derive(Debug, Clone)]
 pub enum AssignOp {
     Set,
+    /// `name := value` — set GLOBAL variable `name` directly.
+    GlobalSet,
+    /// `%name := value` — evaluate `%name`, use result as target global var name.
+    /// Mirrors C TF's dynamic-assign: expand() would turn `%_varName` into the
+    /// value of _varName (e.g. "var_global_mycolor"), yielding a bare ident for
+    /// `:=`.  Without pre-expand we must do the indirection at eval time.
+    IndirectGlobalSet,
     Add,
     Sub,
     Mul,
@@ -488,12 +502,21 @@ pub enum Expr {
     Ternary(Box<Expr>, Box<Expr>, Box<Expr>),
     Assign(String, AssignOp, Box<Expr>),
     Call(String, Vec<Expr>),
+    /// `%{name}(args)` — indirect function call: evaluate `%name` to get the
+    /// function name, then call it with `args`.  Mirrors C TF expand-then-eval
+    /// for `%{callback}(...)` patterns.
+    IndirectCall(String, Vec<Expr>),
     Comma(Vec<Expr>),
     /// `$(cmd)` — execute `cmd` and substitute its echo output.
     CmdSub(String),
     /// `$[expr]` — evaluate `expr` as a nested expression (grouping form used
     /// when `Stmt::Return` passes its raw source directly to `eval_str()`).
     ExprSub(String),
+    /// `%{name}` — indirect variable reference: evaluate `%name` as a string,
+    /// then evaluate THAT string as an expression.  Mirrors C TF's
+    /// expand-then-eval semantics: `expand(%{name})` → value → `eval(value)`.
+    /// This naturally handles n-level indirection and expression values.
+    IndirectVar(String),
 }
 
 // ── Parser ────────────────────────────────────────────────────────────────────
@@ -547,22 +570,46 @@ impl Parser {
     }
 
     fn parse_assign(&mut self) -> Result<Expr, String> {
-        // Look-ahead: if next token is Ident followed by an assign op, parse as assignment.
-        if let Token::Ident(name) = self.peek().clone() {
-            let op = match self.tokens.get(self.pos + 1) {
-                Some(Token::Assign) => Some(AssignOp::Set),
-                Some(Token::PlusAssign) => Some(AssignOp::Add),
-                Some(Token::MinusAssign) => Some(AssignOp::Sub),
-                Some(Token::StarAssign) => Some(AssignOp::Mul),
-                Some(Token::SlashAssign) => Some(AssignOp::Div),
-                Some(Token::PercentAssign) => Some(AssignOp::Rem),
-                _ => None,
-            };
-            if let Some(op) = op {
-                self.pos += 2; // consume ident + assign-op
-                let rhs = self.parse_assign()?;
-                return Ok(Expr::Assign(name, op, Box::new(rhs)));
+        // Look-ahead: if next token is Ident (or %Ident) followed by an assign op,
+        // parse as assignment.  %name := expr is the "global assign" idiom used by
+        // C TF and tf-util scripts like `/test %{_varName} := value`.
+        //
+        // Patterns recognised:
+        //   Ident op expr        — local assignment (=, +=, -=, etc.)
+        //   Ident := expr        — global assignment
+        //   Percent Ident := expr — global assignment via %name form
+        let (name, ident_len) = match self.peek().clone() {
+            Token::Ident(name) => (name, 1usize),
+            Token::Percent => {
+                // %name := expr or %{name} := expr — indirect global assign.
+                match self.tokens.get(self.pos + 1).cloned() {
+                    Some(Token::Ident(name)) => (name, 2usize),
+                    Some(Token::BraceRef(inner)) => {
+                        // Strip default suffix if present (e.g. {name-default}).
+                        let name = inner.split('-').next().unwrap_or(&inner).to_owned();
+                        (name, 2usize)
+                    }
+                    _ => return self.parse_ternary(),
+                }
             }
+            _ => return self.parse_ternary(),
+        };
+        let assign_token_pos = self.pos + ident_len;
+        let op = match self.tokens.get(assign_token_pos) {
+            Some(Token::Assign) if ident_len == 1 => Some(AssignOp::Set),
+            Some(Token::ColonAssign) if ident_len == 1 => Some(AssignOp::GlobalSet),
+            Some(Token::ColonAssign) if ident_len == 2 => Some(AssignOp::IndirectGlobalSet),
+            Some(Token::PlusAssign) if ident_len == 1 => Some(AssignOp::Add),
+            Some(Token::MinusAssign) if ident_len == 1 => Some(AssignOp::Sub),
+            Some(Token::StarAssign) if ident_len == 1 => Some(AssignOp::Mul),
+            Some(Token::SlashAssign) if ident_len == 1 => Some(AssignOp::Div),
+            Some(Token::PercentAssign) if ident_len == 1 => Some(AssignOp::Rem),
+            _ => None,
+        };
+        if let Some(op) = op {
+            self.pos += ident_len + 1; // consume (Percent +) Ident + assign-op
+            let rhs = self.parse_assign()?;
+            return Ok(Expr::Assign(name, op, Box::new(rhs)));
         }
         self.parse_ternary()
     }
@@ -758,13 +805,37 @@ impl Parser {
                 }
                 Ok(inner)
             }
-            // %varname — TF variable reference inside an expression.
-            // Allows $[%n-1], textdecode(%enc), etc.
+            // %varname  — TF variable reference, single-deref: value of %varname.
+            // %{varname} — indirect reference: eval the VALUE of %varname as an
+            //              expression (n-level dereference / C TF expand-then-eval).
+            // %{varname}(args) — indirect call: eval %varname to get function name.
             Token::Percent => {
                 match self.peek().clone() {
                     Token::Ident(name) => {
                         self.pos += 1;
                         Ok(Expr::Var(name))
+                    }
+                    Token::BraceRef(inner) => {
+                        self.pos += 1;
+                        // Strip default suffix (e.g. {name-default}).
+                        let varname = inner.split('-').next().unwrap_or(&inner).to_owned();
+                        if self.eat(&Token::LParen) {
+                            // %{name}(args) — indirect function call.
+                            let mut args = Vec::new();
+                            if self.peek() != &Token::RParen {
+                                args.push(self.parse_assign()?);
+                                while self.eat(&Token::Comma) {
+                                    args.push(self.parse_assign()?);
+                                }
+                            }
+                            if !self.eat(&Token::RParen) {
+                                return Err(format!("expected ')' after args to %{{{varname}}}"));
+                            }
+                            Ok(Expr::IndirectCall(varname, args))
+                        } else {
+                            // %{name} — indirect variable reference (expand-then-eval).
+                            Ok(Expr::IndirectVar(varname))
+                        }
                     }
                     _ => Err("expected variable name after '%'".into()),
                 }
@@ -875,20 +946,27 @@ pub fn eval_expr(expr: &Expr, ctx: &mut dyn EvalContext) -> Result<Value, String
 
         Expr::Assign(name, op, rhs) => {
             let rval = eval_expr(rhs, ctx)?;
-            let new_val = if let AssignOp::Set = op {
-                rval.clone()
-            } else {
-                let cur = ctx.get_var(name).unwrap_or_default();
-                match op {
-                    AssignOp::Add => cur.arith_add(&rval),
-                    AssignOp::Sub => cur.arith_sub(&rval),
-                    AssignOp::Mul => cur.arith_mul(&rval),
-                    AssignOp::Div => cur.arith_div(&rval)?,
-                    AssignOp::Rem => cur.arith_rem(&rval)?,
-                    AssignOp::Set => unreachable!(),
-                }
+            let new_val = match op {
+                AssignOp::Set | AssignOp::GlobalSet | AssignOp::IndirectGlobalSet => rval.clone(),
+                AssignOp::Add => ctx.get_var(name).unwrap_or_default().arith_add(&rval),
+                AssignOp::Sub => ctx.get_var(name).unwrap_or_default().arith_sub(&rval),
+                AssignOp::Mul => ctx.get_var(name).unwrap_or_default().arith_mul(&rval),
+                AssignOp::Div => ctx.get_var(name).unwrap_or_default().arith_div(&rval)?,
+                AssignOp::Rem => ctx.get_var(name).unwrap_or_default().arith_rem(&rval)?,
             };
-            ctx.set_local(name, new_val.clone());
+            match op {
+                // name := val — set %name directly in global scope.
+                AssignOp::GlobalSet => ctx.set_global(name, new_val.clone()),
+                // %name := val — evaluate %name to get target, set that global.
+                AssignOp::IndirectGlobalSet => {
+                    let target = ctx.get_var(name)
+                        .unwrap_or_default()
+                        .to_string();
+                    ctx.set_global(&target, new_val.clone());
+                }
+                // = and compound-assign ops — local scope.
+                _ => ctx.set_local(name, new_val.clone()),
+            }
             Ok(new_val)
         }
 
@@ -921,6 +999,25 @@ pub fn eval_expr(expr: &Expr, ctx: &mut dyn EvalContext) -> Result<Value, String
             // source to eval_str directly).  Evaluate the inner expression in
             // the same context so {N} / %name references work correctly.
             ctx.eval_expr_str(src)
+        }
+
+        Expr::IndirectVar(name) => {
+            // %{name} — C TF expand-then-eval: get the string value of %name,
+            // then evaluate THAT string as an expression.  This naturally
+            // handles n-level dereference and dynamic expressions stored in vars.
+            let s = ctx.get_var(name).unwrap_or_default().to_string();
+            ctx.eval_expr_str(&s)
+        }
+
+        Expr::IndirectCall(name, arg_exprs) => {
+            // %{name}(args) — indirect function call: get the function name
+            // from %name, then call it with the evaluated args.
+            let fn_name = ctx.get_var(name).unwrap_or_default().to_string();
+            let mut args = Vec::with_capacity(arg_exprs.len());
+            for ae in arg_exprs {
+                args.push(eval_expr(ae, ctx)?);
+            }
+            ctx.call_fn(&fn_name, args)
         }
     }
 }
