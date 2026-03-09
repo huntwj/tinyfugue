@@ -524,7 +524,13 @@ impl Interpreter {
                     let expanded_args = expand(args, self)?;
                     let params: Vec<String> =
                         expanded_args.split_whitespace().map(str::to_owned).collect();
-                    return self.invoke_macro(stmts, name, params);
+                    // Absorb ControlFlow::Return at the macro-command boundary —
+                    // /return exits the macro, not the caller's block.
+                    // ControlFlow::Break propagates (to break an enclosing /while).
+                    return match self.invoke_macro(stmts, name, params)? {
+                        Some(ControlFlow::Return(_)) => Ok(None),
+                        other => Ok(other),
+                    };
                 }
 
                 // Built-in command dispatch.
@@ -2085,42 +2091,6 @@ impl EvalContext for Interpreter {
                 return Ok(Value::Str(s));
             }
 
-            "textencode" => {
-                // textencode(s) — percent-encode non-alphanumeric chars so any
-                // string can be safely used as part of a TF variable name.
-                let s = args.first().map(|v| v.to_string()).unwrap_or_default();
-                let mut out = String::with_capacity(s.len());
-                for b in s.bytes() {
-                    if b.is_ascii_alphanumeric() || b == b'_' {
-                        out.push(b as char);
-                    } else {
-                        out.push_str(&format!("%{:02X}", b));
-                    }
-                }
-                return Ok(Value::Str(out));
-            }
-
-            "textdecode" => {
-                // textdecode(s) — reverse of textencode; decode %XX sequences.
-                let s = args.first().map(|v| v.to_string()).unwrap_or_default();
-                let bytes = s.as_bytes();
-                let mut out = String::with_capacity(s.len());
-                let mut i = 0;
-                while i < bytes.len() {
-                    if bytes[i] == b'%' && i + 2 < bytes.len() {
-                        if let Ok(hex) = std::str::from_utf8(&bytes[i+1..i+3]) {
-                            if let Ok(b) = u8::from_str_radix(hex, 16) {
-                                out.push(b as char);
-                                i += 3;
-                                continue;
-                            }
-                        }
-                    }
-                    out.push(bytes[i] as char);
-                    i += 1;
-                }
-                return Ok(Value::Str(out));
-            }
 
             "regmatch" => {
                 // regmatch(pattern, text) — PCRE regex match.

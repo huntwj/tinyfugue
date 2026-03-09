@@ -364,7 +364,8 @@ fn read_brace_name(chars: &mut std::iter::Peekable<std::str::Chars>) -> Result<S
                 name.push('{');
             }
             Some(c) => name.push(c),
-            None => return Err("unclosed '{'".into()),
+            // C TF is lenient about unclosed braces: read to end-of-string.
+            None => break,
         }
     }
     Ok(name)
@@ -405,7 +406,7 @@ fn resolve_brace_impl(name: String, ctx: &mut dyn EvalContext, quote_pos: bool) 
             } else if let Some(default_str) = rest.strip_prefix("L-") {
                 expand_default(default_str, ctx)
             } else {
-                String::new()
+                maybe_quote(String::new(), quote_pos)
             };
         }
 
@@ -423,12 +424,12 @@ fn resolve_brace_impl(name: String, ctx: &mut dyn EvalContext, quote_pos: bool) 
             } else if let Some(default_str) = opt_default {
                 expand_default(default_str, ctx)
             } else {
-                String::new()
+                maybe_quote(String::new(), quote_pos)
             };
         }
 
         // Unrecognised -{…} — return empty.
-        return String::new();
+        return maybe_quote(String::new(), quote_pos);
     }
 
     // ── `*` forms: {*}, {*-<default>} ────────────────────────────────────────
@@ -453,7 +454,7 @@ fn resolve_brace_impl(name: String, ctx: &mut dyn EvalContext, quote_pos: bool) 
         } else if let Some(default_str) = opt_default {
             expand_default(default_str, ctx)
         } else {
-            String::new()
+            maybe_quote(String::new(), quote_pos)
         };
     }
 
@@ -465,7 +466,7 @@ fn resolve_brace_impl(name: String, ctx: &mut dyn EvalContext, quote_pos: bool) 
         } else if let Some(default_str) = opt_default {
             expand_default(default_str, ctx)
         } else {
-            String::new()
+            maybe_quote(String::new(), quote_pos)
         };
     }
 

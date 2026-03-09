@@ -309,19 +309,21 @@ fn strcat_empty_args() {
 
 #[test]
 fn textencode_decode_roundtrip() {
+    // textencode encodes non-alphanumeric chars as _ASCII_ (matching textencode.tf)
     check(
         r#"/set enc=$[textencode("hello world")]
 /echo %enc
 /echo $[textdecode(%enc)]"#,
-        &["hello%20world", "hello world"],
+        &["hello_32_world", "hello world"],
     );
 }
 
 #[test]
 fn textencode_special_chars() {
+    // space=32, plus=43
     check(
         r#"/echo $[textencode("a b+c")]"#,
-        &["a%20b%2Bc"],
+        &["a_32_b_43_c"],
     );
 }
 

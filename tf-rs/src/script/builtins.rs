@@ -391,35 +391,55 @@ pub fn call_builtin(name: &str, args: Vec<Value>) -> Option<Result<Value, String
 
             // ── Text encoding ──────────────────────────────────────────────────
             "textencode" => {
-                // textencode(s) — escape TF metacharacters so the string can be
-                // safely embedded in a TF expression: % → %%, \ → \\, ; → \;
+                // textencode(s) — matches lib/tf/textencode.tf: encodes every
+                // character that is NOT [a-zA-Z0-9] as _<decimal-ascii>_.
+                // e.g. "hello world" → "hello_32_world", "a.b" → "a_46_b"
                 let s = get_str(&args, 0, name)?;
                 let mut out = String::with_capacity(s.len() * 2);
                 for c in s.chars() {
-                    match c {
-                        '%'  => out.push_str("%%"),
-                        '\\' => out.push_str("\\\\"),
-                        ';'  => out.push_str("\\;"),
-                        _    => out.push(c),
+                    if c.is_ascii_alphanumeric() {
+                        out.push(c);
+                    } else {
+                        out.push('_');
+                        out.push_str(&(c as u32).to_string());
+                        out.push('_');
                     }
                 }
                 Value::Str(out)
             }
             "textdecode" => {
-                // textdecode(s) — reverse of textencode
+                // textdecode(s) — reverse of textencode: _N_ → char(N)
                 let s = get_str(&args, 0, name)?;
                 let mut out = String::with_capacity(s.len());
                 let mut chars = s.chars().peekable();
                 while let Some(c) = chars.next() {
-                    if c == '%' && chars.peek() == Some(&'%') {
-                        chars.next();
-                        out.push('%');
-                    } else if c == '\\' {
-                        match chars.next() {
-                            Some('\\') => out.push('\\'),
-                            Some(';')  => out.push(';'),
-                            Some(other) => { out.push('\\'); out.push(other); }
-                            None       => out.push('\\'),
+                    if c == '_' {
+                        // Try to read digits followed by '_'
+                        let mut digits = String::new();
+                        while let Some(&d) = chars.peek() {
+                            if d.is_ascii_digit() {
+                                digits.push(d);
+                                chars.next();
+                            } else {
+                                break;
+                            }
+                        }
+                        if !digits.is_empty() && chars.peek() == Some(&'_') {
+                            chars.next(); // consume closing '_'
+                            if let Ok(n) = digits.parse::<u32>() {
+                                if let Some(decoded) = char::from_u32(n) {
+                                    out.push(decoded);
+                                    continue;
+                                }
+                            }
+                            // Not a valid encoding — emit literally
+                            out.push('_');
+                            out.push_str(&digits);
+                            out.push('_');
+                        } else {
+                            // No digits or no closing '_' — emit '_' and put digits back
+                            out.push('_');
+                            out.push_str(&digits);
                         }
                     } else {
                         out.push(c);
