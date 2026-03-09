@@ -1551,9 +1551,20 @@ impl Interpreter {
 
             // ── Help ──────────────────────────────────────────────────────────
             "help" => {
-                self.output.push("TF commands: /connect /disconnect /world /addworld \
-                    /def /undef /load /repeat /quote /log /nolog /list /listworlds \
-                    /echo /eval /quit".to_owned());
+                let topic = args.trim();
+                let topic = if topic.is_empty() { "summary" } else { topic };
+                match crate::embedded::lookup_help(topic) {
+                    Ok(result) => {
+                        self.output.push(result.header);
+                        for line in result.lines {
+                            self.output.push(line);
+                        }
+                        if let Some(note) = result.footnote {
+                            self.output.push(note);
+                        }
+                    }
+                    Err(msg) => self.output.push(msg),
+                }
                 Ok(None)
             }
 

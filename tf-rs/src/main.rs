@@ -76,6 +76,9 @@ async fn main() {
     event_loop
         .interp
         .set_global_var("TFLIBRARY", Value::Str(format!("{libdir_str}/stdlib.tf")));
+    event_loop
+        .interp
+        .set_global_var("TFHELP", Value::Str(format!("{libdir_str}/tf-help")));
 
     // ── Set variable defaults (mirrors C TF's init_variables / varlist.h) ────
     for (name, val) in [
